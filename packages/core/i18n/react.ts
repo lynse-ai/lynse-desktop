@@ -1,20 +1,25 @@
 "use client";
 
 import i18next from "i18next";
+import { LOCALE_STORAGE_KEYS, matchLocale } from "./index";
 
 export { useTranslation } from "react-i18next";
 
-const LOCALE_STORAGE_KEY = "lynse_locale";
-
 /**
- * Switch the active language and persist the choice to localStorage.
+ * Switch the active language and persist the choice to localStorage across
+ * all known storage keys (app and marketing site).
  */
 export async function changeLanguage(locale: string) {
-  await i18next.changeLanguage(locale);
+  const target = matchLocale(locale) ?? locale;
+  await i18next.changeLanguage(target);
   if (typeof window !== "undefined") {
-    localStorage.setItem(LOCALE_STORAGE_KEY, locale);
+    for (const key of LOCALE_STORAGE_KEYS) {
+      try {
+        localStorage.setItem(key, target);
+      } catch {}
+    }
   }
   if (typeof document !== "undefined") {
-    document.documentElement.lang = locale;
+    document.documentElement.lang = target;
   }
 }

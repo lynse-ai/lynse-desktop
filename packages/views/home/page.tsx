@@ -146,7 +146,7 @@ export function HomePage() {
     day: "numeric",
     weekday: "long",
   }).format(now);
-  const quotes = useDailyQuotes();
+  const quotes = useDailyQuotes(i18n.language);
   const [quoteIndex, setQuoteIndex] = useState(0);
   useEffect(() => {
     const timer = setInterval(() => setQuoteIndex((i) => i + 1), QUOTE_ROTATE_MS);

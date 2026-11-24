@@ -24,18 +24,92 @@ export type LynseEdition = "cn" | "intl";
 declare const __LYNSE_EDITION__: string | undefined;
 declare const __LYNSE_DEV__: boolean | undefined;
 
-export const LYNSE_EDITION: LynseEdition =
-  // Web deployments pick the edition at build time via NEXT_PUBLIC_LYNSE_EDITION
-  // (the Next compiler inlines the literal member expression; see the rules
-  // documented above). The Tauri define stays as the packaged-shell override.
-  (typeof process !== "undefined" && process.env.NEXT_PUBLIC_LYNSE_EDITION) === "intl"
-    ? "intl"
-    : (typeof process !== "undefined" && process.env.NEXT_PUBLIC_LYNSE_EDITION) === "cn"
-      ? "cn"
-      : typeof __LYNSE_EDITION__ !== "undefined" &&
-          (__LYNSE_EDITION__ === "cn" || __LYNSE_EDITION__ === "intl")
-        ? __LYNSE_EDITION__
-        : "cn";
+export const EDITION_STORAGE_KEY = "lynse_edition";
+
+/**
+ * Smart detection of default edition when no user choice has been saved yet:
+ * 1. Web build-time explicit env: NEXT_PUBLIC_LYNSE_EDITION
+ * 2. Web domain heuristic: hostname ends with .ai -> intl, .cn -> cn
+ * 3. Client/Tauri native environment:
+ *    Inspect system timezone (Asia/Shanghai, Chongqing, Harbin, Urumqi, Beijing, PRC, etc.)
+ *    and navigator language (starts with zh) -> cn.
+ * 4. Build-time defined fallback (__LYNSE_EDITION__), or default "intl".
+ */
+export function detectDefaultEdition(): LynseEdition {
+  // Web build-time explicit env
+  if (typeof process !== "undefined" && process.env.NEXT_PUBLIC_LYNSE_EDITION === "intl") return "intl";
+  if (typeof process !== "undefined" && process.env.NEXT_PUBLIC_LYNSE_EDITION === "cn") return "cn";
+
+  // Web hostname inspection
+  if (typeof window !== "undefined" && window.location?.hostname) {
+    const host = window.location.hostname;
+    if (host === "lynse.ai" || host.endsWith(".lynse.ai") || host.endsWith(".ai")) return "intl";
+    if (host === "lynse.cn" || host.endsWith(".lynse.cn") || host.endsWith(".cn")) return "cn";
+  }
+
+  // System environment inspection (Tauri / desktop single package)
+  if (typeof Intl !== "undefined" && typeof Intl.DateTimeFormat === "function") {
+    try {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (tz) {
+        const lowerTz = tz.toLowerCase();
+        if (
+          lowerTz.includes("shanghai") ||
+          lowerTz.includes("chongqing") ||
+          lowerTz.includes("harbin") ||
+          lowerTz.includes("urumqi") ||
+          lowerTz.includes("beijing") ||
+          lowerTz === "prc" ||
+          lowerTz === "asia/taipei" ||
+          lowerTz === "asia/hong_kong"
+        ) {
+          return "cn";
+        }
+      }
+    } catch {}
+  }
+
+  if (typeof navigator !== "undefined" && navigator.language) {
+    if (navigator.language.toLowerCase().startsWith("zh")) {
+      return "cn";
+    }
+  }
+
+  // Fallback to __LYNSE_EDITION__ if defined and valid
+  if (typeof __LYNSE_EDITION__ !== "undefined" && (__LYNSE_EDITION__ === "cn" || __LYNSE_EDITION__ === "intl")) {
+    return __LYNSE_EDITION__;
+  }
+
+  return "intl";
+}
+
+/**
+ * Effective active edition:
+ * User's saved explicit preference in localStorage wins;
+ * otherwise falls back to smart environment detection.
+ */
+export function getEffectiveEdition(): LynseEdition {
+  try {
+    const storage = typeof window !== "undefined" ? window.localStorage : (typeof localStorage !== "undefined" ? localStorage : undefined);
+    const saved = storage?.getItem(EDITION_STORAGE_KEY);
+    if (saved === "cn" || saved === "intl") {
+      return saved;
+    }
+  } catch {}
+  return detectDefaultEdition();
+}
+
+/**
+ * Persist the chosen edition to local storage.
+ */
+export function setEdition(edition: LynseEdition): void {
+  try {
+    const storage = typeof window !== "undefined" ? window.localStorage : (typeof localStorage !== "undefined" ? localStorage : undefined);
+    storage?.setItem(EDITION_STORAGE_KEY, edition);
+  } catch {}
+}
+
+export const LYNSE_EDITION: LynseEdition = getEffectiveEdition();
 
 /** True for dev servers; packaged builds are always false. Used only to gate
  *  debug affordances (e.g. the dev `lynse_edition` view override). */

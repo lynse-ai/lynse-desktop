@@ -4,7 +4,7 @@ import { useEffect, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { cn } from "@lynse/ui/lib/utils";
-import { ChevronDown, Maximize2, Pause, Play, Square, X } from "../icons";
+import { Captions, ChevronDown, Maximize2, Pause, Play, Square, X } from "../icons";
 import { IconSwap } from "../icon-swap";
 import { AudioSourceControls } from "./audio-source-controls";
 import { recordingLevel } from "./audio-sources";
@@ -24,6 +24,9 @@ interface DynamicIslandProps {
   drawerOpen?: boolean;
   /** Called when user taps the transcript toggle. Absent hides the toggle. */
   onToggleDrawer?: () => void;
+  /** Called when user taps the subtitles overlay toggle. Absent hides the toggle. */
+  onToggleSubtitles?: () => void;
+  subtitlesVisible?: boolean;
   /** Docked island (macOS "Dynamic Island"): opaque black stadium capsule
    * hanging below the hardware cutout. Collapsed it shrinks to a mini pill
    * (dot + timer + waveform); hovering reveals the control bar. */
@@ -64,6 +67,8 @@ export function DynamicIsland({
   onExpand,
   drawerOpen,
   onToggleDrawer,
+  onToggleSubtitles,
+  subtitlesVisible,
   notchStyle,
   controlsVisible,
   onPointerEnter,
@@ -230,6 +235,20 @@ export function DynamicIsland({
                     drawerOpen && "rotate-180",
                   )}
                 />
+              </button>
+            )}
+            {onToggleSubtitles && (
+              <button
+                type="button"
+                onClick={onToggleSubtitles}
+                aria-label={t(subtitlesVisible ? "live_translation.hide_overlay" : "live_translation.show_overlay")}
+                title={t(subtitlesVisible ? "live_translation.hide_overlay" : "live_translation.show_overlay")}
+                className={cn(
+                  "flex size-6 items-center justify-center rounded-full transition-[color,background-color,transform] duration-(--duration-quick) hover:bg-muted hover:text-foreground active:scale-[0.96]",
+                  subtitlesVisible ? "text-primary" : "text-muted-foreground",
+                )}
+              >
+                <Captions className="size-3.5" />
               </button>
             )}
             {onExpand && (

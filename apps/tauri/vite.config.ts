@@ -29,9 +29,9 @@ export default defineConfig({
       : [],
   },
   define: {
-    // Edition split (see core/config): `LYNSE_EDITION=cn|intl` picks the
-    // connector set baked into the build; unconfigured builds default to cn.
-    __LYNSE_EDITION__: JSON.stringify(process.env.LYNSE_EDITION ?? "cn"),
+    // Edition split (see core/config): `LYNSE_EDITION=cn|intl` allows explicitly pinning
+    // an edition at build time; unconfigured builds leave it unset for runtime detection.
+    __LYNSE_EDITION__: JSON.stringify(process.env.LYNSE_EDITION ?? ""),
     __LYNSE_DEV__: JSON.stringify(process.env.NODE_ENV !== "production"),
   },
 });

@@ -118,7 +118,7 @@ export interface RecordingMarker {
 /** Subtitle overlay window geometry preset: `default` is the compact
  *  subtitle bar the Rust side creates, `stage` grows the window for
  *  projection-style viewing. */
-export type SubtitleWindowPreset = "default" | "stage";
+export type SubtitleWindowPreset = "default" | "stage" | "meeting" | "listen";
 
 export interface LiveTranslationSnapshot {
   markers?: RecordingMarker[];
@@ -348,14 +348,17 @@ export interface DesktopLiveTranslationApi {
   /** Re-run echo cancellation over a recording's raw tracks (detail page's
    *  重新处理 entry). Resolves with the refreshed transcription record. */
   reprocess: (sessionId: string) => Promise<Record<string, unknown>>;
-  showSubtitles: (show: boolean) => Promise<void>;
+  showSubtitles: (show: boolean, preset?: SubtitleWindowPreset, position?: "top" | "bottom") => Promise<void>;
+  toggleSubtitles?: (preset?: SubtitleWindowPreset, position?: "top" | "bottom") => Promise<boolean>;
   /** Resize/re-position the subtitle overlay window for a display preset:
-   *  `default` is the compact subtitle bar, `stage` is the enlarged
-   *  projection-style window. Optional so the web build hides the control. */
-  setSubtitleWindowPreset?: (preset: SubtitleWindowPreset) => Promise<void>;
+   *  `stage` is the enlarged projection-style window, others are compact bars.
+   *  Optional so the web build hides the control. */
+  setSubtitleWindowPreset?: (preset: SubtitleWindowPreset, position?: "top" | "bottom") => Promise<void>;
+  /** Re-anchor the subtitle overlay window to the top or bottom of the screen. */
+  setSubtitleWindowPosition?: (position: "top" | "bottom") => Promise<void>;
   /** Move the subtitle overlay to the screen the cursor currently sits on
    *  (multi-monitor following). Optional — absent on the web build. */
-  moveSubtitleToCursorScreen?: () => Promise<void>;
+  moveSubtitleToCursorScreen?: (position?: "top" | "bottom") => Promise<void>;
   minimizeToTray: () => Promise<void>;
   showMainWindow: () => Promise<void>;
   /** Hide the main window (close-to-tray); the recording island pops when a

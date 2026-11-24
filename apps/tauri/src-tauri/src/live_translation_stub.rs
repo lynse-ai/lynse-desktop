@@ -96,12 +96,49 @@ pub async fn live_translation_recover(session_id: String) -> CommandResult<Value
 }
 
 #[tauri::command]
-pub fn live_translation_show_subtitles(show: bool) -> CommandResult<()> {
+pub fn live_translation_show_subtitles(
+    show: bool,
+    preset: Option<String>,
+    position: Option<String>,
+) -> CommandResult<()> {
+    let _ = (preset, position);
     if show {
         unsupported()
     } else {
         Ok(())
     }
+}
+
+#[tauri::command]
+pub fn live_translation_toggle_subtitles(
+    preset: Option<String>,
+    position: Option<String>,
+) -> CommandResult<bool> {
+    let _ = (preset, position);
+    Ok(false)
+}
+
+#[tauri::command]
+pub fn live_translation_set_subtitle_preset(
+    preset: String,
+    position: Option<String>,
+) -> CommandResult<()> {
+    let _ = (preset, position);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn live_translation_set_subtitle_position(position: String) -> CommandResult<()> {
+    let _ = position;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn live_translation_move_subtitles_to_cursor_screen(
+    position: Option<String>,
+) -> CommandResult<()> {
+    let _ = position;
+    Ok(())
 }
 
 #[tauri::command]

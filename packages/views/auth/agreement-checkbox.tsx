@@ -1,8 +1,10 @@
 "use client";
 
 import { useTranslation } from "@lynse/core/i18n/react";
+import { cn } from "@lynse/ui/lib/utils";
 import { Check } from "../icons";
 import { privacyUrl, termsUrl } from "../about/links";
+import { isWebPlatform } from "../platform";
 
 /** The user-agreement round check + inline terms/privacy links, shared by
  *  the phone sign-in form and the WeChat bind form. */
@@ -10,14 +12,18 @@ export function AgreementCheckbox({
   agreed,
   onToggle,
   onLink,
+  className,
 }: {
   agreed: boolean;
   onToggle: () => void;
   onLink: (url: string) => void;
+  className?: string;
 }) {
   const { t, i18n } = useTranslation();
+  // Desktop keeps the original left-aligned row; web centers the whole block.
+  const web = isWebPlatform();
   return (
-    <div className="mt-4 flex items-start gap-2">
+    <div className={cn("flex items-start gap-1", web && "justify-center gap-1.5", className)}>
       <button
         type="button"
         role="checkbox"
@@ -31,7 +37,10 @@ export function AgreementCheckbox({
           <Check className="size-2.5 text-primary-foreground" strokeWidth={3.5} />
         )}
       </button>
-      <p className="text-left text-2xs leading-relaxed text-muted-foreground text-pretty">
+      <p className={cn(
+        "text-2xs leading-relaxed text-muted-foreground text-pretty",
+        web ? "text-center" : "text-left",
+      )}>
         {t("auth.agree_prefix")}
         <button
           type="button"

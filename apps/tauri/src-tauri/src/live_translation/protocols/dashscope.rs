@@ -16,8 +16,8 @@ use tokio_tungstenite::tungstenite::handshake::client::Request;
 
 use super::super::ingest_provider_text;
 use super::{
-    InboundOutcome, LiveProtocol, Outbound, ProtocolCtx, SetupFrames, attach_header,
-    value_string,
+    InboundOutcome, LiveProtocol, Outbound, ProtocolCtx, SetupFrames, append_streaming_delta,
+    attach_header, merge_streaming_chunk, value_string,
 };
 use super::super::{ProviderEmission, emit_error};
 
@@ -26,7 +26,8 @@ use super::super::{ProviderEmission, emit_error};
 /// connection descriptor's `extra.asrModel` (the custom provider plugin).
 const DEFAULT_ASR_MODEL: &str = "qwen3-asr-flash-realtime";
 
-pub(crate) struct DashScopeProtocol {    api_key: String,
+pub(crate) struct DashScopeProtocol {
+    api_key: String,
     extra: std::collections::HashMap<String, String>,
     /// Transcript-only mode (`target_language == "none"`): DashScope
     /// LiveTranslate models REJECT a session.update without a `translation`
@@ -35,6 +36,8 @@ pub(crate) struct DashScopeProtocol {    api_key: String,
     /// word. We still ask for a target (the source language) and drop the
     /// translation events, exactly like the Volcengine path.
     transcript_only: bool,
+    source_accumulated: String,
+    translation_accumulated: String,
 }
 
 impl DashScopeProtocol {
@@ -47,6 +50,8 @@ impl DashScopeProtocol {
             api_key,
             extra,
             transcript_only,
+            source_accumulated: String::new(),
+            translation_accumulated: String::new(),
         }
     }
 
@@ -90,6 +95,12 @@ impl LiveProtocol for DashScopeProtocol {
             // Pin one that is accepted; its synthesized audio is
             // never consumed — we read the text events only.
             "voice": "Ethan",
+            "turn_detection": {
+                "type": "server_vad",
+                "threshold": 0.5,
+                "prefix_padding_ms": 300,
+                "silence_duration_ms": 800,
+            },
         });
         // The `translation` block is NOT optional on the
         // LiveTranslate models: a session.update without it (or
@@ -108,15 +119,17 @@ impl LiveProtocol for DashScopeProtocol {
             qwen_translation_target(&target_lang)
         };
         session_cfg["translation"] = json!({ "language": translation_target });
-        if source_lang != "auto" || self.transcript_only {
-            let mut transcription = json!({
-                "model": self.asr_model(),
-            });
-            if source_lang != "auto" {
-                transcription["language"] = json!(source_lang);
-            }
-            session_cfg["input_audio_transcription"] = transcription;
+
+        // Always configure input_audio_transcription so source recognition streams
+        // in real-time while the user is speaking.
+        let mut transcription = json!({
+            "model": self.asr_model(),
+        });
+        if source_lang != "auto" && !source_lang.trim().is_empty() {
+            transcription["language"] = json!(source_lang);
         }
+        session_cfg["input_audio_transcription"] = transcription;
+
         let update = json!({
             "type": "session.update",
             "event_id": format!("evt_{}", uuid::Uuid::new_v4()),
@@ -175,7 +188,7 @@ impl LiveProtocol for DashScopeProtocol {
             emit_error(app, Some(ctx.source), format!("Qwen 实时引擎错误：{reason}"));
             return InboundOutcome::Ignored;
         }
-        let emission = apply_qwen_message(ctx, text, self.transcript_only);
+        let emission = self.apply_message(ctx, text);
         let got_result = emission.is_some();
         super::super::emit_provider_emission(app, emission);
         if got_result {
@@ -186,49 +199,108 @@ impl LiveProtocol for DashScopeProtocol {
     }
 }
 
+impl DashScopeProtocol {
+    /// Apply the recognized/translated text from a Qwen realtime-translation event
+    /// to a segment, accumulating streaming deltas into a coherent rolling utterance.
+    pub(crate) fn apply_message(
+        &mut self,
+        ctx: &ProtocolCtx,
+        text: &str,
+    ) -> Option<ProviderEmission> {
+        let Ok(value) = serde_json::from_str::<Value>(text) else {
+            return None;
+        };
+        let event_type = value.get("type").and_then(Value::as_str)?;
+
+        // Reset buffer boundaries on speech / response start
+        if event_type == "input_audio_buffer.speech_started" {
+            self.source_accumulated.clear();
+            return None;
+        }
+        if event_type == "response.created" {
+            self.translation_accumulated.clear();
+            return None;
+        }
+
+        let (is_recognized, is_final, is_delta, content) = classify_qwen_event(event_type, &value)?;
+        if self.transcript_only && !is_recognized {
+            return None;
+        }
+        if content.is_empty() && !is_final {
+            return None;
+        }
+
+        let text_to_emit = if is_recognized {
+            if is_final {
+                if !content.trim().is_empty() {
+                    self.source_accumulated = content.trim().to_owned();
+                }
+                let full = std::mem::take(&mut self.source_accumulated);
+                if full.trim().is_empty() {
+                    return None;
+                }
+                full
+            } else {
+                if is_delta {
+                    append_streaming_delta(&mut self.source_accumulated, &content);
+                } else {
+                    merge_streaming_chunk(&mut self.source_accumulated, &content);
+                }
+                if self.source_accumulated.trim().is_empty() {
+                    return None;
+                }
+                self.source_accumulated.clone()
+            }
+        } else {
+            // Translation track
+            if is_final {
+                if !content.trim().is_empty() {
+                    self.translation_accumulated = content.trim().to_owned();
+                }
+                let full = std::mem::take(&mut self.translation_accumulated);
+                if full.trim().is_empty() {
+                    return None;
+                }
+                full
+            } else {
+                if is_delta {
+                    append_streaming_delta(&mut self.translation_accumulated, &content);
+                } else {
+                    merge_streaming_chunk(&mut self.translation_accumulated, &content);
+                }
+                if self.translation_accumulated.trim().is_empty() {
+                    return None;
+                }
+                self.translation_accumulated.clone()
+            }
+        };
+
+        let start_ms = ctx.session.last_elapsed_ms.load(std::sync::atomic::Ordering::Relaxed);
+        ingest_provider_text(
+            ctx.session,
+            ctx.source,
+            ctx.epoch,
+            None,
+            start_ms,
+            None,
+            is_recognized,
+            is_final,
+            String::new(),
+            None,
+            &text_to_emit,
+        )
+    }
+}
+
 /// Apply the recognized/translated text from a Qwen realtime-translation event
-/// to a segment. Qwen's protocol is event-driven (`session.update` + streaming
-/// `input_audio_buffer.append` audio) rather than iLiveData's binary-PCM +
-/// `method`-field shape, but the resulting (source-recognition, translation)
-/// pair maps onto the same live-segment model, so we reuse the shared ingest.
+/// to a segment. Free function wrapper for backwards compatibility with tests.
 pub(crate) fn apply_qwen_message(
     ctx: &ProtocolCtx,
     text: &str,
     transcript_only: bool,
 ) -> Option<ProviderEmission> {
-    let Ok(value) = serde_json::from_str::<Value>(text) else {
-        return None;
-    };
-    let event_type = value.get("type").and_then(Value::as_str)?;
-    let (is_recognized, is_final, content) = classify_qwen_event(event_type, &value)?;
-    // Transcript-only mode requested a fake translation target purely to keep
-    // the session alive; the translated text must never surface (the model
-    // echoes the source speech back, which would read as duplicated cards).
-    if transcript_only && !is_recognized {
-        return None;
-    }
-    if content.is_empty() {
-        return None;
-    }
-    // Qwen auto-detects utterance boundaries and carries no provider-side
-    // clock, so the utterance start is simply the capture timeline — the
-    // epoch offset is only for providers that timestamp from their own
-    // attach moment (Volcengine AST); adding it here doubled every qwen
-    // timestamp whenever translation was attached mid-session.
-    let start_ms = ctx.session.last_elapsed_ms.load(std::sync::atomic::Ordering::Relaxed);
-    ingest_provider_text(
-        ctx.session,
-        ctx.source,
-        ctx.epoch,
-        None,
-        start_ms,
-        None,
-        is_recognized,
-        is_final,
-        String::new(),
-        None,
-        &content,
-    )
+    let mut protocol = DashScopeProtocol::new(String::new(), Default::default(), transcript_only);
+    protocol.apply_message(ctx, text)
 }
 
 /// Target languages DashScope LiveTranslate accepts in
@@ -254,21 +326,19 @@ pub(crate) fn qwen_translation_target(code: &str) -> String {
 }
 
 /// Map a Qwen realtime-translation event type to (is_recognized, is_final,
-/// text). Source recognition arrives via `input_audio_transcription.*`; the
+/// is_delta, text). Source recognition arrives via `input_audio_transcription.*`; the
 /// translated text arrives via `response.text.*` (text-only) or
 /// `response.audio_transcript.*` (text+audio) — both carry the same translated
 /// string, so either family is accepted.
-fn classify_qwen_event(event_type: &str, value: &Value) -> Option<(bool, bool, String)> {
+fn classify_qwen_event(event_type: &str, value: &Value) -> Option<(bool, bool, bool, String)> {
     if event_type.contains("input_audio_transcription") {
         let text = event_text(value);
         return if event_type.ends_with(".completed") {
-            Some((true, true, text))
-        } else if event_type.ends_with(".text") || event_type.ends_with(".delta") {
-            // qwen3.5 streams partials as `…transcription.text`; qwen3.8
-            // renamed them to `…transcription.delta`. Both carry the rolling
-            // partial — without `.delta` here the qwen3.8 live transcript
-            // stays invisible until an utterance completes.
-            Some((true, false, text))
+            Some((true, true, false, text))
+        } else if event_type.ends_with(".delta") {
+            Some((true, false, true, text))
+        } else if event_type.ends_with(".text") {
+            Some((true, false, false, text))
         } else {
             None
         };
@@ -276,12 +346,11 @@ fn classify_qwen_event(event_type: &str, value: &Value) -> Option<(bool, bool, S
     if event_type.contains("response.text") || event_type.contains("response.audio_transcript") {
         let text = event_text(value);
         return if event_type.ends_with(".done") {
-            Some((false, true, text))
-        } else if event_type.ends_with(".delta") || event_type.ends_with(".text") {
-            // `.delta` is the qwen3.8 streaming form; `.text` is the
-            // qwen3.5 form (confirmed prefix + `stash` tail, see
-            // `event_text`). Both are rolling partials of the translation.
-            Some((false, false, text))
+            Some((false, true, false, text))
+        } else if event_type.ends_with(".delta") {
+            Some((false, false, true, text))
+        } else if event_type.ends_with(".text") {
+            Some((false, false, false, text))
         } else {
             None
         };

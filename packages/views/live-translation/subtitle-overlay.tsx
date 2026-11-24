@@ -4,7 +4,6 @@ import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { ChevronDown, Monitor, Settings, X } from "../icons";
 import { initI18n } from "@lynse/core/i18n";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { Popover, PopoverContent, PopoverTrigger } from "@lynse/ui/components/ui/popover";
 import { RESOURCES } from "../locales";
 import { useLiveTranslation } from "./use-live-translation";
 import {
@@ -132,6 +131,7 @@ export function LiveSubtitleOverlay() {
   const { api, view } = useLiveTranslation();
   const [prefs, setPrefsState] = useState<SubtitlePrefs>(() => readSubtitlePrefs());
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const historyRef = useRef<HTMLDivElement>(null);
   const historyStickRef = useRef(true);
   // Tick so hold-expiry re-renders without a segment event landing.
@@ -155,17 +155,15 @@ export function LiveSubtitleOverlay() {
   function setPrefs(next: SubtitlePrefs) {
     setPrefsState(next);
     saveSubtitlePrefs(next);
-    void api?.setSubtitleWindowPreset?.(next.preset === "stage" ? "stage" : "default").catch(() => undefined);
+    void api?.setSubtitleWindowPreset?.(next.preset, next.position).catch(() => undefined);
   }
 
-  // Re-apply the window geometry preset on mount: the Rust side always
-  // creates the overlay at the default 720×190 regardless of saved prefs.
+  // Re-apply the window geometry preset and position on mount so saved
+  // preferences take effect immediately in the native Rust window.
   const prefsRef = useRef(prefs);
   useEffect(() => {
-    if (prefsRef.current.preset === "stage") {
-      void api?.setSubtitleWindowPreset?.("stage").catch(() => undefined);
-    }
-    // Mount only — the saved preset is what matters, not live edits.
+    void api?.setSubtitleWindowPreset?.(prefsRef.current.preset, prefsRef.current.position).catch(() => undefined);
+    // Mount only — the saved preset and position are what matter, not live edits.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -229,6 +227,16 @@ export function LiveSubtitleOverlay() {
   }, [historyOpen, view.segments]);
   const historyFinals = useMemo(() => finals.slice(-HISTORY_LINES), [finals]);
 
+  // Pressing Escape closes settings panel.
+  useEffect(() => {
+    if (!settingsOpen) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setSettingsOpen(false);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [settingsOpen]);
+
   const justify = prefs.position === "top" ? "justify-start" : "justify-end";
   const fonts = FONT_CLASS[prefs.fontScale];
 
@@ -247,118 +255,25 @@ export function LiveSubtitleOverlay() {
       }}
     >
       <div className="group relative h-full cursor-move bg-transparent px-5 py-3 text-white" data-tauri-drag-region>
-        {/* Window controls: hidden until hover, like the HUD below. */}
-        <div className="absolute right-3 top-3 z-20 flex items-center gap-0.5 rounded-full bg-black/40 p-0.5 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
-          <Popover>
-            <PopoverTrigger
-              aria-label={t("live_translation.overlay_settings")}
-              title={t("live_translation.overlay_settings")}
-              className="rounded-full p-1.5 text-white/75 transition-colors hover:bg-white/15 hover:text-white"
-            >
-              <Settings className="size-3.5" />
-            </PopoverTrigger>
-            <PopoverContent align="end" sideOffset={8} className="w-64 space-y-3 border border-[var(--stroke-overlay)] text-foreground">
-              <div>
-                <p className="mb-1.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  {t("live_translation.overlay_presets")}
-                </p>
-                <div className="grid grid-cols-3 gap-1">
-                  {(["meeting", "listen", "stage"] as SubtitlePreset[]).map((preset) => (
-                    <button
-                      key={preset}
-                      type="button"
-                      onClick={() => setPrefs(applySubtitlePreset(preset, prefs))}
-                      className={`rounded-md border px-2 py-1.5 text-2xs transition-colors ${
-                        prefs.preset === preset
-                          ? "border-primary/50 bg-primary/10 text-primary"
-                          : "border-border text-muted-foreground hover:bg-muted"
-                      }`}
-                    >
-                      {t(`live_translation.overlay_preset_${preset}`)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <p className="mb-1.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  {t("live_translation.overlay_mode")}
-                </p>
-                <div className="grid grid-cols-3 gap-1">
-                  {(["bilingual", "translation", "original"] as SubtitleDisplayMode[]).map((mode) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      onClick={() => setPrefs({ ...prefs, mode })}
-                      className={`rounded-md border px-2 py-1.5 text-2xs transition-colors ${
-                        prefs.mode === mode
-                          ? "border-primary/50 bg-primary/10 text-primary"
-                          : "border-border text-muted-foreground hover:bg-muted"
-                      }`}
-                    >
-                      {t(`live_translation.overlay_mode_${mode}`)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-2xs text-muted-foreground">{t("live_translation.overlay_font")}</span>
-                <div className="flex gap-1">
-                  {(["s", "m", "l"] as SubtitleFontScale[]).map((scale) => (
-                    <button
-                      key={scale}
-                      type="button"
-                      onClick={() => setPrefs({ ...prefs, fontScale: scale })}
-                      className={`rounded-md border px-2 py-0.5 transition-colors ${
-                        prefs.fontScale === scale
-                          ? "border-primary/50 bg-primary/10 text-primary"
-                          : "border-border text-muted-foreground hover:bg-muted"
-                      }`}
-                    >
-                      {scale.toUpperCase()}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-2xs text-muted-foreground">{t("live_translation.overlay_lines")}</span>
-                <div className="flex gap-1">
-                  {[1, 2, 3, 4, 5].map((lines) => (
-                    <button
-                      key={lines}
-                      type="button"
-                      onClick={() => setPrefs({ ...prefs, visibleLines: lines })}
-                      className={`size-6 rounded-md border text-2xs transition-colors ${
-                        prefs.visibleLines === lines
-                          ? "border-primary/50 bg-primary/10 text-primary"
-                          : "border-border text-muted-foreground hover:bg-muted"
-                      }`}
-                    >
-                      {lines}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="flex gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => setPrefs({ ...prefs, position: prefs.position === "bottom" ? "top" : "bottom" })}
-                  className="flex-1 rounded-md border border-border px-2 py-1.5 text-2xs text-muted-foreground transition-colors hover:bg-muted"
-                >
-                  {prefs.position === "bottom"
-                    ? t("live_translation.overlay_pin_top")
-                    : t("live_translation.overlay_pin_bottom")}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void api?.moveSubtitleToCursorScreen?.().catch(() => undefined)}
-                  className="flex flex-1 items-center justify-center gap-1 rounded-md border border-border px-2 py-1.5 text-2xs text-muted-foreground transition-colors hover:bg-muted"
-                >
-                  <Monitor className="size-3" />
-                  {t("live_translation.overlay_move_screen")}
-                </button>
-              </div>
-            </PopoverContent>
-          </Popover>
+        {/* Window controls: hidden until hover, or kept visible while settings is open. */}
+        <div
+          className={`absolute right-3 top-3 z-20 flex items-center gap-0.5 rounded-full bg-black/40 p-0.5 transition-opacity ${
+            settingsOpen ? "opacity-100" : "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"
+          }`}
+        >
+          <button
+            type="button"
+            aria-label={t("live_translation.overlay_settings")}
+            title={t("live_translation.overlay_settings")}
+            onClick={() => setSettingsOpen((open) => !open)}
+            className={`rounded-full p-1.5 transition-colors ${
+              settingsOpen
+                ? "bg-white/20 text-white"
+                : "text-white/75 hover:bg-white/15 hover:text-white"
+            }`}
+          >
+            <Settings className="size-3.5" />
+          </button>
           <button
             type="button"
             aria-label={t("live_translation.overlay_minimize")}
@@ -378,6 +293,145 @@ export function LiveSubtitleOverlay() {
             <X className="size-3.5" />
           </button>
         </div>
+
+        {/* Settings panel: fits comfortably in the compact window without clipping. */}
+        {settingsOpen && (
+          <div
+            data-tauri-drag-region="false"
+            className="pointer-events-auto absolute right-3 top-11 z-30 w-[420px] max-h-[calc(100vh-56px)] overflow-y-auto rounded-xl border border-white/20 bg-neutral-900/95 p-3 text-white shadow-2xl backdrop-blur-md"
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            <div className="mb-2 flex items-center justify-between border-b border-white/10 pb-1.5">
+              <span className="text-xs font-medium text-white/90">
+                {t("live_translation.overlay_settings")}
+              </span>
+              <button
+                type="button"
+                onClick={() => setSettingsOpen(false)}
+                className="rounded-full p-1 text-white/60 transition-colors hover:bg-white/10 hover:text-white"
+                aria-label={t("live_translation.overlay_history_close")}
+              >
+                <X className="size-3" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 text-left">
+              {/* Column 1: 预设 & 模式 */}
+              <div className="space-y-2.5">
+                <div>
+                  <p className="mb-1 text-2xs font-semibold uppercase tracking-wide text-white/60">
+                    {t("live_translation.overlay_presets")}
+                  </p>
+                  <div className="grid grid-cols-3 gap-1">
+                    {(["meeting", "listen", "stage"] as SubtitlePreset[]).map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => setPrefs(applySubtitlePreset(preset, prefs))}
+                        className={`rounded-md border px-1.5 py-1 text-2xs font-medium transition-colors ${
+                          prefs.preset === preset
+                            ? "border-primary/70 bg-primary/25 text-primary-foreground"
+                            : "border-white/15 text-white/70 hover:bg-white/10 hover:text-white"
+                        }`}
+                      >
+                        {t(`live_translation.overlay_preset_${preset}`)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <p className="mb-1 text-2xs font-semibold uppercase tracking-wide text-white/60">
+                    {t("live_translation.overlay_mode")}
+                  </p>
+                  <div className="grid grid-cols-3 gap-1">
+                    {(["bilingual", "translation", "original"] as SubtitleDisplayMode[]).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setPrefs({ ...prefs, mode })}
+                        className={`rounded-md border px-1.5 py-1 text-2xs font-medium transition-colors ${
+                          prefs.mode === mode
+                            ? "border-primary/70 bg-primary/25 text-primary-foreground"
+                            : "border-white/15 text-white/70 hover:bg-white/10 hover:text-white"
+                        }`}
+                      >
+                        {t(`live_translation.overlay_mode_${mode}`)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Column 2: 字号/行数 & 置顶/置底/移动屏幕 */}
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between gap-1">
+                  <span className="text-2xs text-white/60">{t("live_translation.overlay_font")}</span>
+                  <div className="flex gap-1">
+                    {(["s", "m", "l"] as SubtitleFontScale[]).map((scale) => (
+                      <button
+                        key={scale}
+                        type="button"
+                        onClick={() => setPrefs({ ...prefs, fontScale: scale })}
+                        className={`rounded border px-2 py-0.5 text-2xs font-medium transition-colors ${
+                          prefs.fontScale === scale
+                            ? "border-primary/70 bg-primary/25 text-primary-foreground"
+                            : "border-white/15 text-white/70 hover:bg-white/10 hover:text-white"
+                        }`}
+                      >
+                        {scale.toUpperCase()}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between gap-1">
+                  <span className="text-2xs text-white/60">{t("live_translation.overlay_lines")}</span>
+                  <div className="flex gap-1">
+                    {[1, 2, 3, 4, 5].map((lines) => (
+                      <button
+                        key={lines}
+                        type="button"
+                        onClick={() => setPrefs({ ...prefs, visibleLines: lines })}
+                        className={`size-5 rounded border text-2xs font-medium transition-colors ${
+                          prefs.visibleLines === lines
+                            ? "border-primary/70 bg-primary/25 text-primary-foreground"
+                            : "border-white/15 text-white/70 hover:bg-white/10 hover:text-white"
+                        }`}
+                      >
+                        {lines}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex gap-1.5 pt-0.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextPos = prefs.position === "bottom" ? "top" : "bottom";
+                      setPrefs({ ...prefs, position: nextPos });
+                      void api?.setSubtitleWindowPosition?.(nextPos).catch(() => undefined);
+                    }}
+                    className="flex-1 rounded-md border border-white/20 bg-white/5 px-1.5 py-1 text-2xs text-white/80 transition-colors hover:bg-white/15 hover:text-white"
+                  >
+                    {prefs.position === "bottom"
+                      ? t("live_translation.overlay_pin_top")
+                      : t("live_translation.overlay_pin_bottom")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void api?.moveSubtitleToCursorScreen?.(prefs.position).catch(() => undefined)}
+                    className="flex flex-1 items-center justify-center gap-1 rounded-md border border-white/20 bg-white/5 px-1.5 py-1 text-2xs text-white/80 transition-colors hover:bg-white/15 hover:text-white"
+                  >
+                    <Monitor className="size-3" />
+                    {t("live_translation.overlay_move_screen")}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Latency + health HUD: honest about how far translation trails. */}
         <div className="absolute left-3 top-3 z-20 flex items-center gap-1.5 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
@@ -454,7 +508,7 @@ export function LiveSubtitleOverlay() {
                   ? segment.translatedText
                   : (segment.recognizedText || segment.translatedText);
                 return (
-                  <div key={segment.id} className="min-w-0 opacity-60">
+                  <div key={segment.id} className="min-w-0 opacity-85 transition-opacity">
                     <p
                       className={`line-clamp-2 tracking-tight text-white ${
                         translationPrimary ? `${fonts.translation} font-normal` : `${fonts.original} font-light`
@@ -464,7 +518,10 @@ export function LiveSubtitleOverlay() {
                       <span className="ml-0.5 animate-pulse">…</span>
                     </p>
                     {prefs.mode === "bilingual" && hasTranslation && (
-                      <p className={`text-white/70 ${fonts.translation}`}>{segment.translatedText}</p>
+                      <p className={`text-white/80 ${fonts.translation}`}>
+                        {segment.translatedText}
+                        <span className="ml-0.5 animate-pulse">…</span>
+                      </p>
                     )}
                   </div>
                 );

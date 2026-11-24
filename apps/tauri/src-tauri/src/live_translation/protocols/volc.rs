@@ -18,6 +18,7 @@ use crate::volc_ast;
 use super::super::ingest_provider_text;
 use super::{
     InboundOutcome, LiveProtocol, Outbound, ProtocolCtx, SetupFrames, attach_header,
+    merge_streaming_chunk,
 };
 use super::super::{ProviderEmission, emit_provider_emission};
 
@@ -58,8 +59,13 @@ impl VolcProtocol {
 
 impl LiveProtocol for VolcProtocol {
     fn prepare_request(&self, _url: &str, request: &mut Request) -> Result<(), String> {
-        if !self.api_key.trim().is_empty() {
-            attach_header(request, "x-api-key", self.api_key.trim().to_owned());
+        let key = self.api_key.trim();
+        // Support both old console (AppKey:AccessKey) and new console (single API Key).
+        if let Some((app_key, access_key)) = key.split_once(':').or_else(|| key.split_once(';')) {
+            attach_header(request, "x-api-app-key", app_key.trim().to_owned());
+            attach_header(request, "x-api-access-key", access_key.trim().to_owned());
+        } else if !key.is_empty() {
+            attach_header(request, "x-api-key", key.to_owned());
         }
         attach_header(request, "x-api-resource-id", volc_ast::RESOURCE_ID.to_owned());
         attach_header(request, "x-api-connect-id", uuid::Uuid::new_v4().to_string());
@@ -197,12 +203,14 @@ fn handle_volc_response(
     response: &volc_ast::Response,
     state: &mut VolcProtocol,
 ) -> Option<ProviderEmission> {
-    // Volcengine AST flags a speaker change on the *source* subtitle Start
-    // event. Only the source track carries it (the translation Start repeats
-    // the same flag for the same utterance), so we count on the source track
-    // only to avoid double-incrementing the speaker index.
-    if response.event == volc_ast::EVENT_SOURCE_SUBTITLE_START && response.spk_chg {
-        state.speaker_index += 1;
+    if response.event == volc_ast::EVENT_SOURCE_SUBTITLE_START {
+        state.last_source.clear();
+        if response.spk_chg {
+            state.speaker_index += 1;
+        }
+    }
+    if response.event == volc_ast::EVENT_TRANSLATION_SUBTITLE_START {
+        state.last_translation.clear();
     }
     let subtitle = volc_ast::classify_subtitle(response.event)?;
     let (is_recognized, is_final) = match subtitle {
@@ -214,24 +222,42 @@ fn handle_volc_response(
             (false, is_final)
         }
     };
-    let carry = if is_recognized {
-        &mut state.last_source
+
+    let text = if is_recognized {
+        if is_final {
+            if !response.text.is_empty() {
+                merge_streaming_chunk(&mut state.last_source, &response.text);
+            }
+            let full = std::mem::take(&mut state.last_source);
+            if full.trim().is_empty() {
+                return None;
+            }
+            full
+        } else {
+            merge_streaming_chunk(&mut state.last_source, &response.text);
+            if state.last_source.trim().is_empty() {
+                return None;
+            }
+            state.last_source.clone()
+        }
     } else {
-        &mut state.last_translation
+        if is_final {
+            if !response.text.is_empty() {
+                merge_streaming_chunk(&mut state.last_translation, &response.text);
+            }
+            let full = std::mem::take(&mut state.last_translation);
+            if full.trim().is_empty() {
+                return None;
+            }
+            full
+        } else {
+            merge_streaming_chunk(&mut state.last_translation, &response.text);
+            if state.last_translation.trim().is_empty() {
+                return None;
+            }
+            state.last_translation.clone()
+        }
     };
-    let text = if response.text.is_empty() {
-        carry.clone()
-    } else {
-        response.text.clone()
-    };
-    if text.trim().is_empty() {
-        return None;
-    }
-    if is_final {
-        carry.clear();
-    } else {
-        *carry = text.clone();
-    }
 
     // AST reports utterance bounds in milliseconds from the start of the
     // session; before the first timestamped event we fall back to the capture

@@ -18,7 +18,7 @@ import { LYNSE_SPLASH_SRC } from "./splash-image";
  * packaged default is already compact, so cold start never resizes. Sign-out
  * shrinks it back. No-op on the web (the API getter returns null).
  */
-export function AuthGate({ children }: { children: ReactNode }) {
+export function AuthGate({ children, hideMoreLogin }: { children: ReactNode; hideMoreLogin?: boolean }) {
   const isLoading = useAuthStore((s) => s.isLoading);
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   useChatSession();
@@ -49,7 +49,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }
 
   if (!isAuthenticated) {
-    return <LoginPage />;
+    return <LoginPage hideMoreLogin={hideMoreLogin} />;
   }
 
   return <>{children}</>;

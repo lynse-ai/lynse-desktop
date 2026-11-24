@@ -182,6 +182,10 @@ const ja = {
     cross_link_goto: "認可管理へ"
   },
   auth: {
+    server_region: "サイト",
+    region_cn: "中国サイト",
+    region_intl: "グローバルサイト",
+    region_switch_hint: "各サイトのアカウントとデータは独立しています",
     login_title: "Lynse にログイン",
     login_subtitle: "録音・文字起こし・議事録・ナレッジ管理",
     brand_title: "Lynse — AI議事録とナレッジベース",
@@ -189,6 +193,8 @@ const ja = {
     apple_login: "Apple でログイン",
     or_divider: "または",
     email_placeholder: "メールアドレス",
+    code_sent_to: "認証コードを {{target}} に送信しました",
+    edit_account: "変更",
     phone_code_login: "電話番号でログイン",
     wechat_qr_login: "WeChat スキャンでログイン",
     wechat_qr_pending: "WeChat スキャンログインは準備中です",
@@ -241,7 +247,7 @@ const ja = {
     wechat_bind_failed: "リンクに失敗しました。もう一度お試しください",
     sms_login: "電話番号でログイン",
     sms_phone_label: "電話番号",
-    sms_phone_placeholder: "電話番号を入力",
+    sms_phone_placeholder: "電話番号またはメールアドレス",
     sms_code_label: "SMS認証コード",
     sms_send_code: "コードを送信",
     sms_sending: "送信中…",

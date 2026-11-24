@@ -14,7 +14,7 @@ import {
   SelectValue,
 } from "@lynse/ui/components/ui/select";
 import { useTheme } from "@lynse/ui/components/common/theme-provider";
-import { useTranslation } from "@lynse/core/i18n/react";
+import { useTranslation, changeLanguage } from "@lynse/core/i18n/react";
 import { cn } from "@lynse/ui/lib/utils";
 import { Copy, Download } from "../icons";
 import {
@@ -228,7 +228,7 @@ function groupLabelKey(id: AppThemeGroupId): string {
 
 export function AppearanceSection() {
   const { theme, setTheme, resolvedTheme } = useTheme();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [state, setState] = useState<AppThemeState>(() => getAppThemeState());
   const mode = resolvedTheme === "dark" ? "dark" : "light";
 
@@ -257,6 +257,35 @@ export function AppearanceSection() {
       <header className="pb-5 pt-2">
         <h1 className="text-2xl font-semibold tracking-tight">{t("settings.appearance")}</h1>
       </header>
+
+      <section className="space-y-4 pb-4" aria-label={t("layout.language")}>
+        <div className="rounded-2xl border border-border bg-card p-4">
+          <div className="flex items-center justify-between gap-6">
+            <div className="space-y-0.5">
+              <Label className="text-sm font-medium">{t("layout.language")}</Label>
+            </div>
+            <div className="w-[min(21rem,54%)] flex justify-end">
+              <Select
+                value={i18n?.language ?? "en"}
+                onValueChange={(code) => {
+                  if (code) void changeLanguage(code);
+                }}
+              >
+                <SelectTrigger size="sm" className="min-w-32 rounded-full text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="en">{t("layout.lang_en")}</SelectItem>
+                  <SelectItem value="zh-Hans">{t("layout.lang_zh")}</SelectItem>
+                  <SelectItem value="zh-Hant">{t("layout.lang_zh_hant")}</SelectItem>
+                  <SelectItem value="ja">{t("layout.lang_ja")}</SelectItem>
+                  <SelectItem value="ko">{t("layout.lang_ko")}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </div>
+      </section>
 
       <section className="space-y-4" aria-label={t("settings.visual_style")}>
         <p className="text-sm font-medium">{t("settings.visual_style")}</p>

@@ -164,3 +164,54 @@ pub(super) fn value_u64(value: &Value, key: &str) -> u64 {
         .and_then(|value| value.parse().ok())
         .unwrap_or_default()
 }
+
+/// Append an incremental chunk to the accumulated text, handling word-spacing
+/// for Latin/alphanumeric scripts while preserving natural CJK punctuation/flow.
+pub(crate) fn append_streaming_delta(accumulated: &mut String, incoming: &str) {
+    let trimmed = incoming.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if accumulated.is_empty() {
+        accumulated.push_str(trimmed);
+        return;
+    }
+    // Check if space is needed between two ASCII words (e.g. "Hello" + "world")
+    // or after ASCII punctuation (e.g. "Hello world," + "how")
+    let last_char = accumulated.chars().last();
+    let first_char = trimmed.chars().next();
+    if let (Some(last), Some(first)) = (last_char, first_char) {
+        if !accumulated.ends_with(' ')
+            && ((last.is_ascii_alphanumeric() && first.is_ascii_alphanumeric())
+                || (matches!(last, ',' | '.' | '!' | '?' | ':' | ';')
+                    && first.is_ascii_alphanumeric()))
+        {
+            accumulated.push(' ');
+        }
+    }
+    accumulated.push_str(trimmed);
+}
+
+/// Merge a streaming chunk (which may be a pure incremental delta or a cumulative
+/// replacement) into the accumulated utterance text.
+pub(crate) fn merge_streaming_chunk(accumulated: &mut String, incoming: &str) {
+    let trimmed = incoming.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if accumulated.is_empty() {
+        accumulated.push_str(trimmed);
+        return;
+    }
+    // Case 1: Server sends cumulative text (incoming contains accumulated as prefix).
+    if trimmed.starts_with(accumulated.as_str()) || incoming.starts_with(accumulated.as_str()) {
+        *accumulated = trimmed.to_owned();
+        return;
+    }
+    // Case 2: Exact duplicate re-send.
+    if accumulated == trimmed {
+        return;
+    }
+    // Case 3: Incremental chunk.
+    append_streaming_delta(accumulated, incoming);
+}

@@ -23,7 +23,6 @@ export function AudioSourceControls({ compact = false, inline = false, statusOnl
   const [permissions, setPermissions] = useState<LivePermissionStatus | null>(null);
   const [pending, setPending] = useState<LiveAudioSource | null>(null);
   const busy = useRef(false);
-  const notified = useRef("");
   const active = !!view.sessionId;
   const sources = active ? (view.audioSources ?? []) : preferred;
 
@@ -50,11 +49,6 @@ export function AudioSourceControls({ compact = false, inline = false, statusOnl
   });
   const showAecWarning = view.aecDegraded && sources.length === 2 && view.systemLevel > 0.01;
   const notice = [...messages.map((m) => m.text), ...(showAecWarning ? [t("recording_sources.aec_failed")] : [])].join("；");
-  useEffect(() => {
-    const key = `${view.sessionId ?? ""}:${notice}`;
-    if (compact && active && notice && notified.current !== key) toast.warning(notice, { id: `recording-sources:${view.sessionId}` });
-    notified.current = key;
-  }, [compact, active, view.sessionId, notice]);
 
   if (!api) return null;
 

@@ -182,6 +182,10 @@ const ko = {
     cross_link_goto: "권한 기록으로 이동"
   },
   auth: {
+    server_region: "사이트",
+    region_cn: "중국 사이트",
+    region_intl: "글로벌 사이트",
+    region_switch_hint: "각 사이트의 계정 데이터는 독립되어 있습니다",
     login_title: "Lynse 로그인",
     login_subtitle: "녹음, 문자 변환, 회의록, 지식 관리",
     brand_title: "Lynse, AI 회의록과 지식 베이스",
@@ -189,6 +193,8 @@ const ko = {
     apple_login: "Apple 계정으로 로그인",
     or_divider: "또는",
     email_placeholder: "이메일 주소",
+    code_sent_to: "인증 코드가 {{target}} (으)로 전송되었습니다",
+    edit_account: "수정",
     phone_code_login: "휴대폰 인증으로 로그인",
     wechat_qr_login: "WeChat QR로 로그인",
     wechat_qr_pending: "WeChat QR 로그인은 준비 중입니다",
@@ -241,7 +247,7 @@ const ko = {
     wechat_bind_failed: "연결에 실패했습니다. 다시 시도해 주세요",
     sms_login: "전화번호 로그인",
     sms_phone_label: "전화번호",
-    sms_phone_placeholder: "전화번호를 입력하세요",
+    sms_phone_placeholder: "전화번호 또는 이메일",
     sms_code_label: "SMS 인증 코드",
     sms_send_code: "코드 전송",
     sms_sending: "전송 중…",

@@ -102,7 +102,7 @@ async function fetchQuotePool(): Promise<DailyQuote[]> {
 }
 
 /** Curated 励志 quotes shown when no provider answers (or to pad the pool). */
-const FALLBACK_QUOTES: DailyQuote[] = [
+const FALLBACK_QUOTES_ZH: DailyQuote[] = [
   { text: "长风破浪会有时，直挂云帆济沧海", source: "李白《行路难》" },
   { text: "天生我材必有用，千金散尽还复来", source: "李白《将进酒》" },
   { text: "大鹏一日同风起，扶摇直上九万里", source: "李白《上李邕》" },
@@ -136,18 +136,49 @@ const FALLBACK_QUOTES: DailyQuote[] = [
   { text: "操千曲而后晓声，观千剑而后识器", source: "刘勰《文心雕龙》" },
 ];
 
+const FALLBACK_QUOTES_EN: DailyQuote[] = [
+  { text: "The secret of getting ahead is getting started.", source: "Mark Twain" },
+  { text: "It always seems impossible until it's done.", source: "Nelson Mandela" },
+  { text: "The only way to do great work is to love what you do.", source: "Steve Jobs" },
+  { text: "In the middle of difficulty lies opportunity.", source: "Albert Einstein" },
+  { text: "Simplicity is the ultimate sophistication.", source: "Leonardo da Vinci" },
+  { text: "Action is the foundational key to all success.", source: "Pablo Picasso" },
+  { text: "Believe you can and you're halfway there.", source: "Theodore Roosevelt" },
+  { text: "Focus on being productive instead of busy.", source: "Tim Ferriss" },
+  { text: "Opportunities don't happen. You create them.", source: "Chris Grosser" },
+  { text: "Do what you can, with what you have, where you are.", source: "Theodore Roosevelt" },
+  { text: "Stay hungry, stay foolish.", source: "Steve Jobs" },
+  { text: "Small deeds done are better than great deeds planned.", source: "Peter Marshall" },
+  { text: "Write it on your heart that every day is the best day in the year.", source: "Ralph Waldo Emerson" },
+];
+
+const FALLBACK_QUOTES_JA: DailyQuote[] = [
+  { text: "千里の道も一歩から", source: "老子" },
+  { text: "七転び八起き", source: "日本のことわざ" },
+  { text: "一期一会", source: "千利休" },
+  { text: "継続は力なり", source: "日本の格言" },
+  { text: "雨垂れ石を穿つ", source: "漢書" },
+  { text: "初心忘るべからず", source: "世阿弥" },
+];
+
 /**
  * The rotating quote pool: fresh provider quotes first, curated fallback
  * entries padding the tail so the carousel always has something to show.
  */
-export function useDailyQuotes(): DailyQuote[] {
+export function useDailyQuotes(locale?: string): DailyQuote[] {
+  const isEn = locale?.startsWith("en");
+  const isJa = locale?.startsWith("ja");
+
   const query = useQuery({
-    queryKey: ["daily-quotes"],
-    queryFn: fetchQuotePool,
+    queryKey: ["daily-quotes", isEn ? "en" : isJa ? "ja" : "zh"],
+    queryFn: () => (isEn || isJa ? Promise.resolve([]) : fetchQuotePool()),
     staleTime: POOL_REFRESH_MS,
     refetchInterval: POOL_REFRESH_MS,
     refetchOnWindowFocus: false,
   });
+
+  if (isEn) return FALLBACK_QUOTES_EN;
+  if (isJa) return FALLBACK_QUOTES_JA;
   const fetched = query.data ?? [];
-  return fetched.length > 0 ? [...fetched, ...FALLBACK_QUOTES] : FALLBACK_QUOTES;
+  return fetched.length > 0 ? [...fetched, ...FALLBACK_QUOTES_ZH] : FALLBACK_QUOTES_ZH;
 }

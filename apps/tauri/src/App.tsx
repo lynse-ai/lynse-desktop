@@ -151,7 +151,7 @@ export default function App() {
       <NativeThemeSync />
       <AppThemeSync />
       <Suspense>{renderWindow(kind)}</Suspense>
-      <Toaster />
+      {kind !== "recording-island" && kind !== "live-subtitles" && <Toaster />}
     </ThemeProvider>
   );
 }

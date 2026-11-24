@@ -1,12 +1,18 @@
 import i18next from "i18next";
 import { initReactI18next } from "react-i18next";
 import type { Resource } from "i18next";
+import { getEffectiveEdition } from "../config";
 
 export const DEFAULT_LOCALE = "en";
 export const SUPPORTED_LOCALES = ["en", "zh-Hans", "zh-Hant", "ja", "ko"] as const;
 export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
 
-const LOCALE_STORAGE_KEY = "lynse_locale";
+export const LOCALE_STORAGE_KEY = "lynse_locale";
+export const LOCALE_STORAGE_KEYS = [
+  "lynse_locale",
+  "lynse-lang",
+  "lynse_lang",
+] as const;
 
 /**
  * Map a BCP-47 tag (e.g. "zh-CN", "en-US") onto a supported locale.
@@ -79,6 +85,74 @@ function syncDocumentLang(locale: string) {
 }
 
 /**
+ * Determine the initial locale with the following precedence:
+ * 1. URL search parameter (?lng=, ?lang=, ?locale=)
+ * 2. Caller-supplied locale option
+ * 3. Persisted user choice in localStorage (app key "lynse_locale", marketing key "lynse-lang", or "lynse_lang")
+ * 4. In international edition (LYNSE_EDITION === "intl" or hostname ending with ".ai"):
+ *    Default to "en" (or "ja"/"ko" if user's system language explicitly starts with those),
+ *    matching the international marketing site on www.lynse.ai which defaults to English.
+ * 5. Best-effort system language detection
+ */
+export function getInitialLocale(optsLocale?: string): SupportedLocale {
+  // 1. URL search params (e.g. ?lng=en, ?lang=en, ?locale=en)
+  if (typeof window !== "undefined" && window.location?.search) {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const queryParam = params.get("lng") || params.get("lang") || params.get("locale");
+      if (queryParam) {
+        const matched = matchLocale(queryParam);
+        if (matched) return matched;
+      }
+    } catch {}
+  }
+
+  // 2. Caller-supplied locale option
+  if (optsLocale) {
+    const matched = matchLocale(optsLocale);
+    if (matched) return matched;
+  }
+
+  // 3. Persisted choice in localStorage (supports app and marketing website keys)
+  if (typeof window !== "undefined") {
+    try {
+      for (const key of LOCALE_STORAGE_KEYS) {
+        const stored = localStorage.getItem(key);
+        if (stored) {
+          const matched = matchLocale(stored);
+          if (matched) return matched;
+        }
+      }
+    } catch {}
+  }
+
+  // 4. In international edition (getEffectiveEdition() === "intl" or host ends with .ai):
+  // Global site defaults to English, unless system language explicitly matches ja or ko.
+  const isIntlEdition =
+    getEffectiveEdition() === "intl" ||
+    (typeof window !== "undefined" &&
+      (window.location?.hostname === "lynse.ai" ||
+        window.location?.hostname?.endsWith(".lynse.ai") ||
+        window.location?.hostname?.endsWith(".ai")));
+
+  if (isIntlEdition) {
+    if (typeof navigator !== "undefined") {
+      const candidates = navigator.languages ?? [navigator.language];
+      for (const tag of candidates) {
+        if (!tag) continue;
+        const lower = tag.toLowerCase();
+        if (lower.startsWith("ja")) return "ja";
+        if (lower.startsWith("ko")) return "ko";
+      }
+    }
+    return DEFAULT_LOCALE;
+  }
+
+  // 5. Fallback: system language detection
+  return detectSystemLocale();
+}
+
+/**
  * Initialise i18next with the given locale and translation resources.
  * Safe to call multiple — subsequent calls are no-ops once initialised.
  */
@@ -88,12 +162,31 @@ export function initI18n(opts: {
 }) {
   if (i18next.isInitialized) return;
 
-  // Precedence: persisted choice → caller-supplied locale → system language
-  const stored =
-    typeof window !== "undefined"
-      ? localStorage.getItem(LOCALE_STORAGE_KEY)
-      : null;
-  const lng = stored || opts.locale || detectSystemLocale();
+  const lng = getInitialLocale(opts.locale);
+
+  // Sync to localStorage keys so both the app and the marketing site are aligned
+  if (typeof window !== "undefined") {
+    try {
+      for (const key of LOCALE_STORAGE_KEYS) {
+        if (!localStorage.getItem(key)) {
+          localStorage.setItem(key, lng);
+        }
+      }
+    } catch {}
+
+    // Listen for storage changes from other tabs or the marketing site
+    try {
+      window.addEventListener("storage", (e) => {
+        if (e.key && (LOCALE_STORAGE_KEYS as readonly string[]).includes(e.key) && e.newValue) {
+          const matched = matchLocale(e.newValue);
+          if (matched && matched !== i18next.language) {
+            void i18next.changeLanguage(matched);
+            syncDocumentLang(matched);
+          }
+        }
+      });
+    } catch {}
+  }
 
   i18next.use(initReactI18next).init({
     lng,

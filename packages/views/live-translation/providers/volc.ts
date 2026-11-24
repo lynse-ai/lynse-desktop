@@ -22,6 +22,7 @@ export const volcPlugin: LiveTranslationProviderPlugin = {
       labelKey: "live_translation.provider_volc_api_key",
       secret: true,
       required: true,
+      placeholder: "语音控制台 API Key，或 AppKey:AccessKey",
     },
     {
       key: "endpoint",

@@ -220,6 +220,19 @@ export function RecordingIslandWindow() {
 
   const drawerOpen = phase === "drawer";
 
+  const [subtitlesVisible, setSubtitlesVisible] = useState(false);
+  const toggleSubtitles = useCallback(async () => {
+    if (!api) return;
+    if (api.toggleSubtitles) {
+      const next = await api.toggleSubtitles().catch(() => !subtitlesVisible);
+      setSubtitlesVisible(next);
+    } else {
+      const next = !subtitlesVisible;
+      await api.showSubtitles(next).catch(() => undefined);
+      setSubtitlesVisible(next);
+    }
+  }, [api, subtitlesVisible]);
+
   // Mirrors the resume branch of useRecordingSession.togglePause: when the
   // session targets a non-"none" language, re-attach the translation stream
   // (replacing the one dropped by pause). If no provider answers we resume
@@ -297,6 +310,8 @@ export function RecordingIslandWindow() {
         onPause={() => void togglePause()}
         onStop={() => void api?.stop()}
         onExpand={() => void api?.openRecordingPage()}
+        onToggleSubtitles={toggleSubtitles}
+        subtitlesVisible={subtitlesVisible}
         notchStyle={notchStyle}
         controlsVisible={phase === "controls" || phase === "drawer" || phase === "closing"}
         onPointerEnter={handlePointerEnter}

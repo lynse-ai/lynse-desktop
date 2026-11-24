@@ -1,11 +1,55 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach, vi } from "vitest";
 import {
   CLOUDBASE_AGENT_URL,
   CLOUDBASE_MEMORY_URL,
+  EDITION_STORAGE_KEY,
   agentUrlForApiUrl,
   defaultApiUrlForEdition,
+  detectDefaultEdition,
+  getEffectiveEdition,
   memoryUrlForApiUrl,
+  setEdition,
 } from "./index";
+
+describe("edition resolution & persistence", () => {
+  let mockStore: Record<string, string> = {};
+
+  beforeEach(() => {
+    mockStore = {};
+    vi.unstubAllGlobals();
+    const mockStorage = {
+      getItem: (key: string) => mockStore[key] ?? null,
+      setItem: (key: string, value: string) => {
+        mockStore[key] = value;
+      },
+      clear: () => {
+        mockStore = {};
+      },
+      removeItem: (key: string) => {
+        delete mockStore[key];
+      },
+    };
+    vi.stubGlobal("localStorage", mockStorage);
+    vi.stubGlobal("window", { localStorage: mockStorage });
+  });
+
+  it("prioritizes user's explicit saved preference in localStorage", () => {
+    setEdition("intl");
+    expect(mockStore[EDITION_STORAGE_KEY]).toBe("intl");
+    expect(getEffectiveEdition()).toBe("intl");
+
+    setEdition("cn");
+    expect(mockStore[EDITION_STORAGE_KEY]).toBe("cn");
+    expect(getEffectiveEdition()).toBe("cn");
+  });
+
+  it("detects edition based on environment when no preference is saved", () => {
+    delete mockStore[EDITION_STORAGE_KEY];
+    const detected = detectDefaultEdition();
+    expect(["cn", "intl"]).toContain(detected);
+    expect(getEffectiveEdition()).toBe(detected);
+  });
+});
 
 describe("edition → gateway mapping", () => {
   it("sends each packaged edition to its own production account system", () => {

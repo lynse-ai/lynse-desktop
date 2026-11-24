@@ -182,6 +182,10 @@ const en = {
     cross_link_goto: "Go to authorizations"
   },
   auth: {
+    server_region: "Site",
+    region_cn: "China Site",
+    region_intl: "Global Site",
+    region_switch_hint: "Accounts and data are isolated between sites",
     login_title: "Sign in to Lynse",
     login_subtitle: "Record, transcribe, and organize your meetings",
     brand_title: "Lynse, your AI meeting notes and knowledge base",
@@ -189,6 +193,8 @@ const en = {
     apple_login: "Sign in with Apple",
     or_divider: "or",
     email_placeholder: "Email address",
+    code_sent_to: "Verification code sent to {{target}}",
+    edit_account: "Edit",
     phone_code_login: "Sign in with phone code",
     wechat_qr_login: "Sign in with WeChat QR",
     wechat_qr_pending: "WeChat QR sign-in is coming soon",
@@ -240,7 +246,7 @@ const en = {
     wechat_phone_already_bound: "This phone number is already linked to WeChat, but this sign-in could not match the existing account. Please sign in with your phone number.",
     sms_login: "Phone sign-in",
     sms_phone_label: "Phone number",
-    sms_phone_placeholder: "Enter phone number",
+    sms_phone_placeholder: "Phone number or email",
     sms_code_label: "SMS code",
     sms_send_code: "Send code",
     sms_sending: "Sending…",

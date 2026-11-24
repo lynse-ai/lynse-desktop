@@ -6,7 +6,14 @@ import { Input } from "@lynse/ui/components/ui/input";
 import { Button } from "@lynse/ui/components/ui/button";
 import { useAuthStore } from "@lynse/core/auth";
 import { api } from "@lynse/core/api";
-import { LYNSE_EDITION } from "@lynse/core/config";
+import {
+  getEffectiveEdition,
+  setEdition,
+  defaultApiUrlForEdition,
+  agentUrlForApiUrl,
+  AGENT_API_URL_STORAGE_KEY,
+  type LynseEdition,
+} from "@lynse/core/config";
 import {
   emailSessionFromLogin,
   isValidEmail,
@@ -58,7 +65,13 @@ import {
   smsSessionFromLogin,
 } from "@lynse/core/auth/sms";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { ArrowRight, ChevronRight, KeyRound, Loader2, QrCode } from "../icons";
+import { ArrowRight, Check, ChevronDown, ChevronRight, KeyRound, Loader2, QrCode } from "../icons";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@lynse/ui/components/ui/dropdown-menu";
 import { getDesktopAppApi, openExternalUrl } from "../app-update";
 import { isWebPlatform } from "../platform";
 import {
@@ -71,6 +84,7 @@ import { cn } from "@lynse/ui/lib/utils";
 import { AgreementCheckbox } from "./agreement-checkbox";
 import { WechatIcon } from "./wechat-icon";
 import { AppleIcon } from "./apple-icon";
+import { GoogleIcon } from "./google-icon";
 import { WechatBindForm } from "./wechat-bind-form";
 import { appleErrorMessage } from "./apple-bind-landing";
 import { authErrorText } from "./auth-errors";
@@ -88,6 +102,8 @@ type QrPhase = "creating" | "ready" | "scanned" | "expired" | "error";
  *  code, or the API form. */
 type LoginView = "phone" | "email" | "more" | "qr" | "api";
 
+const webProviderButtonClass = "flex h-9 w-full items-center justify-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70";
+
 /**
  * Startup login page, shown by the AuthGate before any session exists, in
  * the compact welcome window (690×450 — the window shape is AuthGate's
@@ -104,7 +120,11 @@ type LoginView = "phone" | "email" | "more" | "qr" | "api";
  * Server / API-key configuration lives inside the API form itself (and the
  * standalone /api-config route); the page keeps no extra link to it.
  */
-export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: ReactNode } = {}) {
+export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
+  subtitle?: string;
+  footer?: ReactNode;
+  hideMoreLogin?: boolean;
+} = {}) {
   const { t } = useTranslation();
   const devApiAuth = hasDevApiAuth();
   // The web build (www.lynse.cn/app) fills a real browser viewport instead of
@@ -112,9 +132,11 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
   // form column on the left, storyboard carousel on the right (see the aside
   // below).
   const web = isWebPlatform();
-  // intl builds lead with Google / Apple / email sign-in; cn leads with the
+  // Active edition state: defaults to effective edition (saved pick -> smart timezone/locale detection).
+  const [edition, setEditionState] = useState<LynseEdition>(getEffectiveEdition);
+  // intl leads with Google / Apple / email sign-in; cn leads with the
   // phone + SMS form and WeChat (see the view branches below).
-  const intl = LYNSE_EDITION === "intl";
+  const intl = edition === "intl";
   const googleReady = isGoogleConfigured();
 
   // Active sign-in view. Phone is the CN default; intl leads with email.
@@ -123,6 +145,42 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
   // All other login methods (phone SMS, WeChat, QR) are strictly excluded.
   const activeView: LoginView = intl ? (view === "api" ? "api" : "email") : view;
 
+  const handleSelectEdition = (newEdition: LynseEdition) => {
+    if (newEdition === edition) return;
+    setEdition(newEdition);
+    setEditionState(newEdition);
+
+    // Switch default API gateway & agent URL
+    const newApiUrl = defaultApiUrlForEdition(newEdition);
+    api().setBaseUrl(newApiUrl);
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem("lynse_api_url", newApiUrl);
+        const agentUrl = agentUrlForApiUrl(newApiUrl);
+        api().setAgentBaseUrl(agentUrl);
+        if (agentUrl) localStorage.setItem(AGENT_API_URL_STORAGE_KEY, agentUrl);
+        else localStorage.removeItem(AGENT_API_URL_STORAGE_KEY);
+      } catch {}
+    }
+
+    // Switch active view according to edition
+    setView(newEdition === "intl" ? "email" : "phone");
+
+    // Reset error & transient states
+    setError(null);
+    setSmsError(null);
+    setAccount("");
+    setSmsCode("");
+    setStep("account");
+    setCodeTarget(null);
+    setResendIn(0);
+    setQrPhase("creating");
+    qrCancelledRef.current = true;
+    wechatCancelledRef.current = true;
+    ssoCancelledRef.current = true;
+    appleCancelledRef.current = true;
+  };
+
   // Create a challenge, show its QR, then
   // poll until the Lynse mobile app scans + confirms it.
   const completeLogin = useAuthStore((s) => s.completeLogin);
@@ -130,11 +188,12 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
   const [qrPayload, setQrPayload] = useState("");
   const qrCancelledRef = useRef(false);
 
-  // Phone + SMS sign-in (CN default). The intl email form shares the same
-  // code/resend/agreement state — the handlers branch on the active view.
-  const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
+  // Progressive single-input sign-in (Muse style): Step 1 collects account (phone or email),
+  // Step 2 collects verification code in-place.
+  const [account, setAccount] = useState("");
+  const [step, setStep] = useState<"account" | "code">("account");
   const [smsCode, setSmsCode] = useState("");
+  const [codeTarget, setCodeTarget] = useState<string | null>(null);
   const [codeSending, setCodeSending] = useState(false);
   const [smsSubmitting, setSmsSubmitting] = useState(false);
   const [resendIn, setResendIn] = useState(0);
@@ -257,27 +316,60 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
     return () => clearInterval(timer);
   }, [resending]);
 
+  const currentAccount = account.trim();
+  const isEmail = isValidEmail(currentAccount);
+  const phone = currentAccount.replace(/^\+86/, "").replace(/[\s()-]/g, "");
+  const target = isEmail ? currentAccount : !intl && isValidChinaPhone(phone) ? phone : null;
+  const showDialCode = !intl && (currentAccount === "" || /^1\d*$/.test(currentAccount));
+
+  function maskAccount(val: string): string {
+    const trimmed = val.trim();
+    if (trimmed.includes("@")) {
+      const [user, domain] = trimmed.split("@");
+      if (!user || !domain) return trimmed;
+      if (user.length <= 2) return `${user[0]}***@${domain}`;
+      return `${user.slice(0, 2)}***${user.slice(-1)}@${domain}`;
+    }
+    const digits = trimmed.replace(/\D/g, "");
+    if (digits.length === 11) {
+      return `${digits.slice(0, 3)}****${digits.slice(-4)}`;
+    }
+    if (digits.length > 7) {
+      return `${digits.slice(0, 3)}****${digits.slice(-2)}`;
+    }
+    return trimmed;
+  }
+
   async function handleSendCode() {
-    if (codeSending || resendIn > 0) return;
-    if (activeView === "email" && !isValidEmail(email)) return;
-    if (activeView !== "email" && !isValidChinaPhone(phone)) return;
+    if (!target || codeSending || smsSubmitting) return;
+    if (!agreed) {
+      setSmsError(t("auth.agree_prefix") + t("auth.agree_terms") + t("auth.agree_privacy"));
+      return;
+    }
     setSmsError(null);
+    if (target === codeTarget && resendIn > 0) {
+      setStep("code");
+      return;
+    }
     setCodeSending(true);
     try {
-      const res =
-        activeView === "email"
-          ? await sendEmailCaptcha(email.trim())
-          : await sendSmsCaptcha(phone.trim());
-      if (res.success) {
+      const res = isEmail
+        ? await sendEmailCaptcha(target)
+        : await sendSmsCaptcha(target);
+      if (res.success || res.cooldown > 0) {
+        setCodeTarget(target);
         setResendIn(res.cooldown > 0 ? res.cooldown : SMS_RESEND_DEFAULT_SECONDS);
-      } else {
-        if (res.cooldown > 0) setResendIn(res.cooldown);
-        setSmsError(t("auth.sms_send_failed"));
+        setStep("code");
       }
+      if (!res.success) setSmsError(t("auth.sms_send_failed"));
     } catch (e: unknown) {
       // Rate limiting arrives with the remaining wait inside `data.cooldown`.
       const wait = cooldownSecondsFromError(e);
-      if (wait) setResendIn(wait);
+      if (wait) {
+        setCodeTarget(target);
+        setResendIn(wait);
+        setStep("code");
+      }
       setSmsError(authErrorText(e, t, "auth.sms_send_failed"));
     } finally {
       setCodeSending(false);
@@ -286,16 +378,14 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
 
   async function handleSmsLogin(codeOverride?: string) {
     const code = codeOverride ?? smsCode;
-    const emailView = activeView === "email";
-    const targetValid = emailView ? isValidEmail(email) : isValidChinaPhone(phone);
-    if (!agreed || !targetValid || !isCompleteSmsCode(code) || smsSubmitting) return;
+    if (!agreed || !target || target !== codeTarget || !isCompleteSmsCode(code) || smsSubmitting) return;
     setSmsError(null);
     setSmsSubmitting(true);
     try {
-      const vo = emailView
-        ? await loginByEmailCode(email.trim(), code)
-        : await loginByPhoneCode(phone.trim(), code);
-      completeLogin(emailView ? emailSessionFromLogin(vo) : smsSessionFromLogin(vo));
+      const vo = isEmail
+        ? await loginByEmailCode(target, code)
+        : await loginByPhoneCode(target, code);
+      completeLogin(isEmail ? emailSessionFromLogin(vo) : smsSessionFromLogin(vo));
     } catch (e: unknown) {
       setSmsError(authErrorText(e, t, "auth.sms_login_failed"));
     } finally {
@@ -725,15 +815,6 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
           : t("auth.qr_login_hint");
   const qrDimmed = qrPhase === "expired" || qrPhase === "error";
 
-  const targetValid = view === "email" ? isValidEmail(email) : isValidChinaPhone(phone);
-  const sendCodeDisabled = !targetValid || codeSending || resendIn > 0;
-  const loginDisabled =
-    !agreed || !targetValid || !isCompleteSmsCode(smsCode) || smsSubmitting;
-
-  // Shared pill-input treatment (borderless muted fill, like the mobile app).
-  const pillInputClass =
-    "border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0 focus-visible:shadow-none rounded-none";
-
   // First-time third-party sign-in: replace the whole login page with a
   // single, distraction-free binding card (no logo, tabs, brand panel,
   // agreement checkbox or other sign-in methods). Cancel returns to the
@@ -755,11 +836,13 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
             }}
             onBound={completeWechatSession}
           />
-          <AgreementCheckbox
-            agreed={agreed}
-            onToggle={() => setAgreed(!agreed)}
-            onLink={handleAgreeLink}
-          />
+          <div className="mt-4">
+            <AgreementCheckbox
+              agreed={agreed}
+              onToggle={() => setAgreed(!agreed)}
+              onLink={handleAgreeLink}
+            />
+          </div>
         </div>
       </main>
     );
@@ -795,46 +878,49 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
       )}
 
       {/* Left column: brand block + the active sign-in form. Desktop hugs the
-          compact welcome window (actions pinned to the bottom edge); web
-          centers a narrow form column, Plaud-welcome style. */}
+          compact welcome window; web centers a narrow form column. */}
       <div
         className={cn(
-          "relative z-10 flex min-w-0 flex-col px-7 pb-5 pt-14",
-          web ? "w-full items-center justify-center lg:w-1/2" : "w-1/2",
+          "relative z-10 flex min-w-0 flex-col",
+          web
+            ? "w-full items-center justify-center px-7 pb-5 pt-14 lg:w-1/2"
+            : "w-1/2 px-8 pb-3 pt-[63px]",
         )}
       >
+        {/* Top Logo */}
         <button
           type="button"
           aria-label="Lynse"
           onClick={handleLogoTap}
-          className={cn("cursor-default", web ? "mx-auto mb-5 mt-2 block" : "self-start")}
+          className={cn("block cursor-default", web ? "mx-auto mb-5 mt-2" : "mb-6 self-start")}
         >
           <img src={LYNSE_LOGO_SRC} alt="" className="h-5 w-auto dark:invert" />
         </button>
-        <h1
-          className={cn(
-            "font-semibold tracking-tight",
-            web ? "text-center text-2xl" : "mt-5 text-lg",
-          )}
-        >
-          {t("auth.welcome_title")}
-        </h1>
-        <p
-          className={cn(
-            "mt-2.5 text-[13px] leading-relaxed text-muted-foreground",
-            web && "max-w-[300px] break-words text-center",
-          )}
-        >
-          {subtitle ?? t("auth.login_subtitle")}
-        </p>
 
+        {/* Content block — naturally spaced down the column */}
         <div
           className={cn(
-            "mt-7 overflow-y-auto",
-            web ? "w-full max-w-[300px]" : "w-full max-w-[260px] flex-1",
+            "flex w-full flex-col",
+            web ? "max-w-[300px] items-center" : "max-w-[280px]",
           )}
         >
-        {activeView === "more" ? (
+          <h1
+            className={cn(
+              "font-semibold tracking-tight text-foreground",
+              web ? "text-center text-2xl" : "text-xl",
+            )}
+          >
+            {t("auth.welcome_title")}
+          </h1>
+          <p className={cn(
+            "leading-relaxed text-muted-foreground",
+            web ? "mt-2.5 break-words text-center text-[13px]" : "mt-2 text-xs",
+          )}>
+            {subtitle ?? t("auth.login_subtitle")}
+          </p>
+
+          <div className="mt-7 w-full">
+          {activeView === "more" ? (
           /* ── More ways to sign in ─────────────────────── */
           <div className="space-y-4">
             <p className="text-center text-sm font-medium">
@@ -934,225 +1020,7 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
             </div>
           </div>
         ) : activeView !== "api" ? (
-          activeView === "email" ? (
-            /* ── Email + code sign-in (intl default), Google/Apple above ── */
-            <>
-              {/* Google/Apple stay visible on intl: clicking without the
-                  Firebase/OAuth backend config explains the pending state
-                  instead of dying silently, and the flows activate the
-                  moment the environment variables land. */}
-              <button
-                type="button"
-                onClick={() => {
-                  if (!googleReady) { toast(t("auth.google_pending")); return; }
-                  void handleGoogleLogin();
-                }}
-                data-testid="google-login"
-                disabled={googleBusy}
-                className="flex h-9 w-full items-center justify-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70"
-              >
-                <span className="text-sm">{t("auth.google_login")}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setError(null);
-                  void renderAppleLoginUrl()
-                    .then((url) => {
-                      if (!isAppleAuthorizeUrlConfigured(url)) {
-                        toast(t("auth.apple_pending"));
-                        return;
-                      }
-                      startAppleLogin(url);
-                    })
-                    .catch((e: unknown) => setError(authErrorText(e, t, "auth.login_failed")));
-                }}
-                className="mt-2 flex h-9 w-full items-center justify-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70"
-              >
-                <span className="text-sm">{t("auth.apple_login")}</span>
-              </button>
-              <div className="my-4 flex items-center gap-3 text-2xs text-muted-foreground">
-                <span className="h-px flex-1 bg-border" />
-                {t("auth.or_divider")}
-                <span className="h-px flex-1 bg-border" />
-              </div>
-
-              {/* ── Email pill ─────────────────────────────── */}
-              <Input
-                inputMode="email"
-                autoComplete="email"
-                placeholder={t("auth.email_placeholder")}
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") void handleSmsLogin();
-                }}
-                className={pillInputClass}
-              />
-
-              {/* ── Code pill (send button inside) ─────────── */}
-              <div className="relative mt-3.5">
-                <Input
-                  inputMode="numeric"
-                  maxLength={SMS_CODE_LENGTH}
-                  placeholder={t("auth.sms_code_placeholder")}
-                  value={smsCode}
-                  onChange={(e) => handleSmsCodeChange(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") void handleSmsLogin();
-                  }}
-                  className="h-9 rounded-full border-0 bg-muted pl-3.5 pr-24 text-sm shadow-none focus-visible:ring-0 focus-visible:shadow-none"
-                />
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  className="absolute right-3 top-1/2 h-6 -translate-y-1/2 px-0 text-xs font-medium hover:bg-transparent"
-                  disabled={sendCodeDisabled}
-                  onClick={handleSendCode}
-                >
-                  {codeSending
-                    ? t("auth.sms_sending")
-                    : resendIn > 0
-                      ? t("auth.sms_resend_in", { seconds: resendIn })
-                      : t("auth.sms_send_code")}
-                </Button>
-              </div>
-
-              {/* ── Sign-in + agreement ────────────────────── */}
-              <Button
-                size="sm"
-                className="relative mt-6 h-9 w-full rounded-full bg-gradient-to-r from-[color-mix(in_oklab,var(--primary)_55%,white)] to-primary text-sm font-medium text-primary-foreground hover:opacity-90"
-                disabled={loginDisabled}
-                onClick={() => handleSmsLogin()}
-              >
-                {smsSubmitting ? (
-                  <>
-                    <Loader2 className="size-4 animate-spin" />
-                    {t("auth.sms_logging_in")}
-                  </>
-                ) : (
-                  t("auth.sms_login_btn")
-                )}
-                {!smsSubmitting && (
-                  <ArrowRight className="absolute right-4 top-1/2 size-4 -translate-y-1/2" />
-                )}
-              </Button>
-              {smsError && (
-                <p className="mt-3 text-left text-xs text-destructive">{smsError}</p>
-              )}
-              <AgreementCheckbox
-                agreed={agreed}
-                onToggle={() => setAgreed(!agreed)}
-                onLink={handleAgreeLink}
-              />
-            </>
-          ) : activeView === "phone" ? (
-            <>
-              {/* ── Social sign-in above the form (web, CN edition) ── */}
-              {web && !intl && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => void handleAppleWebLogin()}
-                    disabled={appleBusy}
-                    className="flex h-9 w-full items-center justify-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70"
-                  >
-                    <AppleIcon className="size-4" />
-                    <span className="text-sm">{t("auth.apple_login")}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleWechatQrLogin()}
-                    className="mt-2 flex h-9 w-full items-center justify-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70"
-                  >
-                    <WechatIcon className="size-4" />
-                    <span className="text-sm">{t("auth.wechat_qr_login")}</span>
-                  </button>
-                  <div className="my-4 flex items-center gap-3 text-2xs text-muted-foreground">
-                    <span className="h-px flex-1 bg-border" />
-                    {t("auth.or_divider")}
-                    <span className="h-px flex-1 bg-border" />
-                  </div>
-                </>
-              )}
-              {/* ── Phone number pill ──────────────────────── */}
-              <div className="flex h-9 items-center gap-3 rounded-full bg-muted px-3.5">
-                <span className="text-sm text-foreground">+86</span>
-                <span className="h-4 w-px shrink-0 bg-border" />
-                <Input
-                  inputMode="numeric"
-                  autoComplete="tel"
-                  placeholder={t("auth.sms_phone_placeholder")}
-                  value={phone}
-                  onChange={(e) =>
-                    setPhone(e.target.value.replace(/\D/g, "").slice(0, 11))
-                  }
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") void handleSmsLogin();
-                  }}
-                  className={`flex-1 ${pillInputClass}`}
-                />
-              </div>
-
-              {/* ── SMS code pill (send button inside) ─────── */}
-              <div className="relative mt-3.5">
-                <Input
-                  inputMode="numeric"
-                  maxLength={SMS_CODE_LENGTH}
-                  placeholder={t("auth.sms_code_placeholder")}
-                  value={smsCode}
-                  onChange={(e) => handleSmsCodeChange(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") void handleSmsLogin();
-                  }}
-                  className="h-9 rounded-full border-0 bg-muted pl-3.5 pr-24 text-sm shadow-none focus-visible:ring-0 focus-visible:shadow-none"
-                />
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  className="absolute right-3 top-1/2 h-6 -translate-y-1/2 px-0 text-xs font-medium hover:bg-transparent"
-                  disabled={sendCodeDisabled}
-                  onClick={handleSendCode}
-                >
-                  {codeSending
-                    ? t("auth.sms_sending")
-                    : resendIn > 0
-                      ? t("auth.sms_resend_in", { seconds: resendIn })
-                      : t("auth.sms_send_code")}
-                </Button>
-              </div>
-
-              {/* ── Sign-in + agreement ────────────────────── */}
-              <Button
-                size="sm"
-                className="relative mt-6 h-9 w-full rounded-full bg-gradient-to-r from-[color-mix(in_oklab,var(--primary)_55%,white)] to-primary text-sm font-medium text-primary-foreground hover:opacity-90"
-                disabled={loginDisabled}
-                onClick={() => handleSmsLogin()}
-              >
-                {smsSubmitting ? (
-                  <>
-                    <Loader2 className="size-4 animate-spin" />
-                    {t("auth.sms_logging_in")}
-                  </>
-                ) : (
-                  t("auth.sms_login_btn")
-                )}
-                {!smsSubmitting && (
-                  <ArrowRight className="absolute right-4 top-1/2 size-4 -translate-y-1/2" />
-                )}
-              </Button>
-              {smsError && (
-                <p className="mt-3 text-left text-xs text-destructive">{smsError}</p>
-              )}
-              <AgreementCheckbox
-                agreed={agreed}
-                onToggle={() => setAgreed(!agreed)}
-                onLink={handleAgreeLink}
-              />
-            </>
-          ) : (
+          activeView === "qr" ? (
             /* ── App-scanned QR code sign-in ──────────────── */
             <div className="space-y-4 text-center">
               <div className="relative mx-auto flex size-[184px] items-center justify-center overflow-hidden rounded-2xl border border-border/60 bg-muted/30">
@@ -1199,6 +1067,299 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
                 {t("auth.back_to_phone")}
               </Button>
             </div>
+          ) : (
+            /* ── Unified Account / Verification Code (Muse progressive single-input) ── */
+            <>
+              {web && (
+                <>
+                  <div className="space-y-2">
+                    {intl ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!googleReady) { toast(t("auth.google_pending")); return; }
+                            void handleGoogleLogin();
+                          }}
+                          data-testid="google-login"
+                          disabled={googleBusy}
+                          className={webProviderButtonClass}
+                        >
+                          <span className="text-sm">{t("auth.google_login")}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setError(null);
+                            void renderAppleLoginUrl()
+                              .then((url) => {
+                                if (!isAppleAuthorizeUrlConfigured(url)) {
+                                  toast(t("auth.apple_pending"));
+                                  return;
+                                }
+                                startAppleLogin(url);
+                              })
+                              .catch((e: unknown) => setError(authErrorText(e, t, "auth.login_failed")));
+                          }}
+                          className={webProviderButtonClass}
+                        >
+                          <span className="text-sm">{t("auth.apple_login")}</span>
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => void handleAppleWebLogin()}
+                          disabled={appleBusy}
+                          className={webProviderButtonClass}
+                        >
+                          <AppleIcon className="size-4" />
+                          <span className="text-sm">{t("auth.apple_login")}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleWechatQrLogin()}
+                          className={webProviderButtonClass}
+                        >
+                          <WechatIcon className="size-4" />
+                          <span className="text-sm">{t("auth.wechat_qr_login")}</span>
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  <div className="my-4 flex items-center gap-3 text-2xs text-muted-foreground">
+                    <span className="h-px flex-1 bg-border" />
+                    {t("auth.or_divider")}
+                    <span className="h-px flex-1 bg-border" />
+                  </div>
+                </>
+              )}
+
+              {step === "account" ? (
+                /* ── Step 1: Account Input (Single pill, Muse-style) ── */
+                <>
+                  <div className="relative flex h-10.5 items-center rounded-full border border-border/50 bg-muted/40 px-3.5 transition-all focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-primary/20">
+                    {showDialCode && (
+                      <div className="flex items-center">
+                        <span className="text-sm font-medium text-foreground/80">+86</span>
+                        <span className="mx-2 h-3.5 w-px bg-border/60" />
+                      </div>
+                    )}
+                    <Input
+                      type={intl ? "email" : "text"}
+                      inputMode={intl ? "email" : "text"}
+                      autoComplete={intl ? "email" : "username"}
+                      autoCapitalize="none"
+                      spellCheck={false}
+                      disabled={codeSending}
+                      placeholder={intl ? t("auth.email_placeholder") : t("auth.sms_phone_placeholder")}
+                      value={account}
+                      onChange={(e) => {
+                        setAccount(e.target.value);
+                        if (smsError) setSmsError(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void handleSendCode();
+                      }}
+                      className="h-full flex-1 border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0 focus-visible:shadow-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleSendCode}
+                      disabled={!target || codeSending}
+                      title={t("auth.sms_send_code")}
+                      aria-label={t("auth.sms_send_code")}
+                      className="ml-2 flex size-7.5 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground transition-all hover:opacity-90 hover:scale-105 active:scale-95 disabled:opacity-30 disabled:pointer-events-none"
+                    >
+                      {codeSending ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <ArrowRight className="size-3.5" />
+                      )}
+                    </button>
+                  </div>
+
+                  {smsError && (
+                    <p className="mt-2 text-center text-xs text-destructive">{smsError}</p>
+                  )}
+
+                  <div className="mt-4">
+                    <AgreementCheckbox
+                      agreed={agreed}
+                      onToggle={() => setAgreed(!agreed)}
+                      onLink={handleAgreeLink}
+                    />
+                  </div>
+                </>
+              ) : (
+                /* ── Step 2: Verification Code Input (Single pill, in-place transition) ── */
+                <>
+                  <div className="mb-2 flex items-center justify-between px-1 text-2xs text-muted-foreground">
+                    <span className="truncate">
+                      {t("auth.code_sent_to", { target: maskAccount(codeTarget ?? account) })}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={codeSending || smsSubmitting}
+                      onClick={() => {
+                        setStep("account");
+                        setSmsCode("");
+                        setSmsError(null);
+                      }}
+                      className="ml-2 shrink-0 font-medium text-primary hover:underline"
+                    >
+                      {t("auth.edit_account")}
+                    </button>
+                  </div>
+
+                  <div className="relative flex h-10.5 items-center rounded-full border border-border/50 bg-muted/40 px-3.5 transition-all focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-primary/20">
+                    <Input
+                      autoFocus
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      disabled={smsSubmitting}
+                      maxLength={SMS_CODE_LENGTH}
+                      placeholder={t("auth.sms_code_placeholder")}
+                      value={smsCode}
+                      onChange={(e) => handleSmsCodeChange(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void handleSmsLogin();
+                      }}
+                      className="h-full flex-1 border-0 bg-transparent p-0 text-sm tracking-wider shadow-none focus-visible:ring-0 focus-visible:shadow-none"
+                    />
+                    <div className="ml-2 flex items-center gap-1.5 shrink-0">
+                      {smsSubmitting ? (
+                        <Loader2 className="size-4 animate-spin text-primary" />
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={codeSending || resendIn > 0}
+                          onClick={handleSendCode}
+                          className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+                        >
+                          {codeSending
+                            ? t("auth.sms_sending")
+                            : resendIn > 0
+                              ? `${resendIn}s`
+                              : t("auth.sms_send_code")}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleSmsLogin()}
+                        disabled={!isCompleteSmsCode(smsCode) || smsSubmitting}
+                        aria-label={t("auth.sms_login_btn")}
+                        className="ml-1 flex size-7.5 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground transition-all hover:opacity-90 hover:scale-105 active:scale-95 disabled:opacity-30 disabled:pointer-events-none"
+                      >
+                        {smsSubmitting ? (
+                          <Loader2 className="size-3.5 animate-spin" />
+                        ) : (
+                          <ArrowRight className="size-3.5" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  {smsError && (
+                    <p className="mt-2 text-center text-xs text-destructive">{smsError}</p>
+                  )}
+
+                  <div className="mt-4">
+                    <AgreementCheckbox
+                      agreed={agreed}
+                      onToggle={() => setAgreed(!agreed)}
+                      onLink={handleAgreeLink}
+                    />
+                  </div>
+                </>
+              )}
+
+              {!web && <div className="mt-7">
+                <div className="flex items-center gap-3 text-2xs text-muted-foreground/80">
+                  <span className="h-px flex-1 bg-border/50" />
+                  <span>{t("auth.or_divider")}</span>
+                  <span className="h-px flex-1 bg-border/50" />
+                </div>
+                <div className="mt-4 flex items-center justify-center gap-5">
+                  {intl ? (
+                    <>
+                      {/* Google Icon Button */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!googleReady) { toast(t("auth.google_pending")); return; }
+                          void handleGoogleLogin();
+                        }}
+                        disabled={googleBusy}
+                        data-testid="google-login"
+                        title={t("auth.google_login")}
+                        aria-label={t("auth.google_login")}
+                        className="flex size-10 items-center justify-center rounded-full border border-border/60 bg-muted/30 shadow-2xs transition-all hover:bg-muted hover:border-border hover:scale-105 active:scale-95 disabled:opacity-50"
+                      >
+                        <GoogleIcon className="size-4.5" />
+                      </button>
+
+                      {/* Apple Icon Button */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setError(null);
+                          void renderAppleLoginUrl()
+                            .then((url) => {
+                              if (!isAppleAuthorizeUrlConfigured(url)) {
+                                toast(t("auth.apple_pending"));
+                                return;
+                              }
+                              startAppleLogin(url);
+                            })
+                            .catch((e: unknown) => setError(authErrorText(e, t, "auth.login_failed")));
+                        }}
+                        disabled={appleBusy || appleWaiting}
+                        title={t("auth.apple_login")}
+                        aria-label={t("auth.apple_login")}
+                        className="flex size-10 items-center justify-center rounded-full border border-border/60 bg-muted/30 text-foreground shadow-2xs transition-all hover:bg-muted hover:border-border hover:scale-105 active:scale-95 disabled:opacity-50"
+                      >
+                        <AppleIcon className="size-4.5 text-foreground" />
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      {/* WeChat Icon Button */}
+                      <button
+                        type="button"
+                        onClick={handleWechatLogin}
+                        disabled={wechatWaiting}
+                        title={t("auth.wechat_login")}
+                        aria-label={t("auth.wechat_login")}
+                        className="flex size-10 items-center justify-center rounded-full border border-border/60 bg-muted/30 text-[#07C160] shadow-2xs transition-all hover:bg-muted hover:border-border hover:scale-105 active:scale-95 disabled:opacity-50"
+                      >
+                        <WechatIcon className="size-5" />
+                      </button>
+
+                      {/* Apple Icon Button */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (getDesktopAppApi()?.apple) {
+                            void handleAppleDesktopLogin();
+                          } else {
+                            void handleAppleWebLogin();
+                          }
+                        }}
+                        disabled={appleBusy || appleWaiting}
+                        title={t("auth.apple_login")}
+                        aria-label={t("auth.apple_login")}
+                        className="flex size-10 items-center justify-center rounded-full border border-border/60 bg-muted/30 text-foreground shadow-2xs transition-all hover:bg-muted hover:border-border hover:scale-105 active:scale-95 disabled:opacity-50"
+                      >
+                        <AppleIcon className="size-4.5 text-foreground" />
+                      </button>
+
+                    </>
+                  )}
+                </div>
+              </div>}
+            </>
           )
         ) : (
           /* ── API sign-in: server selection + API key in one form; the
@@ -1221,12 +1382,11 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
 
         {error && <p className="mt-3 text-center text-xs text-destructive">{error}</p>}
         {footer && <div className="mt-4 text-center">{footer}</div>}
+          </div>
         </div>
 
-        {/* ── More ways to sign in (phone view) / WeChat, SSO or Apple wait
-            state. Desktop pins it to the window's bottom edge; web keeps it
-            right under the centered form. ── */}
-        {(!intl && (activeView === "phone" || wechatWaiting || ssoWaiting || appleWaiting)) && (
+        {/* Keep the extra Web sign-in options below the centered form. */}
+        {(wechatWaiting || ssoWaiting || appleWaiting) ? (
           <div className={cn(web ? "mt-5" : "mt-auto pt-3")}>
             {wechatWaiting ? (
               <div className="space-y-1.5 text-center">
@@ -1264,7 +1424,7 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
                   {t("auth.wechat_cancel")}
                 </Button>
               </div>
-            ) : appleWaiting ? (
+            ) : (
               <div className="space-y-1.5 text-center">
                 <p className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
                   <Loader2 className="size-3.5 animate-spin" />
@@ -1282,18 +1442,71 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
                   {t("auth.wechat_cancel")}
                 </Button>
               </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setView("more")}
-                className="flex items-center gap-1 text-2xs text-muted-foreground transition-colors hover:text-foreground"
-              >
-                {t("auth.more_login")}
-                <ChevronRight className="size-3" />
-              </button>
             )}
           </div>
-        )}
+        ) : !hideMoreLogin && web && !intl && activeView === "phone" ? (
+          <button
+            type="button"
+            onClick={() => setView("more")}
+            className="mt-5 flex items-center gap-1 text-2xs text-muted-foreground transition-colors hover:text-foreground"
+          >
+            {t("auth.more_login")}
+            <ChevronRight className="size-3" />
+          </button>
+        ) : !hideMoreLogin && !web ? (
+          <button
+            type="button"
+            onClick={() => setView("more")}
+            className="sr-only"
+            aria-label={t("auth.more_login")}
+          >
+            {t("auth.more_login")}
+          </button>
+        ) : null}
+
+        {/* ── Bottom site switcher: small subtle text at bottom ── */}
+        {!web && <div className="mt-auto flex items-center justify-center pt-3 pb-1.5 text-2xs text-muted-foreground/60 select-none">
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <button
+                  type="button"
+                  disabled={codeSending || smsSubmitting}
+                  className="inline-flex items-center gap-1 font-normal text-muted-foreground/70 hover:text-foreground transition-colors cursor-pointer"
+                  aria-label={t("auth.server_region")}
+                >
+                  <span>{t("auth.server_region")}:</span>
+                  <span className="font-mono underline underline-offset-2 text-foreground/80">
+                    {edition === "cn" ? "lynse.cn" : "lynse.ai"}
+                  </span>
+                  <ChevronDown className="size-2.5 opacity-60" />
+                </button>
+              }
+            />
+            <DropdownMenuContent align="center" side="top" className="w-40 p-1">
+              <DropdownMenuItem
+                onClick={() => handleSelectEdition("cn")}
+                className="flex items-center justify-between rounded-md px-2.5 py-1.5 text-xs cursor-pointer"
+              >
+                <div className="flex flex-col">
+                  <span className="font-mono font-medium text-foreground">lynse.cn</span>
+                  <span className="text-3xs text-muted-foreground">{t("auth.region_cn")}</span>
+                </div>
+                {edition === "cn" && <Check className="size-3.5 text-primary" />}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => handleSelectEdition("intl")}
+                className="flex items-center justify-between rounded-md px-2.5 py-1.5 text-xs cursor-pointer"
+              >
+                <div className="flex flex-col">
+                  <span className="font-mono font-medium text-foreground">lynse.ai</span>
+                  <span className="text-3xs text-muted-foreground">{t("auth.region_intl")}</span>
+                </div>
+                {edition === "intl" && <Check className="size-3.5 text-primary" />}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>}
       </div>
 
       {/* ── Right column. Desktop: full-height rounded artwork card, inset on

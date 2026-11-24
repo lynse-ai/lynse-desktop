@@ -182,6 +182,10 @@ const zhHant = {
     cross_link_goto: "前往我的授權"
   },
   auth: {
+    server_region: "登入站點",
+    region_cn: "中國站點",
+    region_intl: "國際站點",
+    region_switch_hint: "各站點帳號與數據相互獨立",
     login_title: "登入 Lynse",
     login_subtitle: "錄音轉寫、會議紀要、知識管理",
     brand_title: "Lynse，你的 AI 會議紀要與知識庫",
@@ -189,6 +193,8 @@ const zhHant = {
     apple_login: "Apple 帳號登入",
     or_divider: "或",
     email_placeholder: "郵件地址",
+    code_sent_to: "驗證碼已發送至 {{target}}",
+    edit_account: "修改",
     phone_code_login: "手機驗證碼登入",
     wechat_qr_login: "微信掃碼登入",
     wechat_qr_pending: "微信掃碼登入正在接入，敬請期待",
@@ -239,7 +245,7 @@ const zhHant = {
     wechat_bind_failed: "綁定失敗，請重試",
     sms_login: "手機號登入",
     sms_phone_label: "手機號",
-    sms_phone_placeholder: "請輸入手機號",
+    sms_phone_placeholder: "手機號或郵箱",
     sms_code_label: "簡訊驗證碼",
     sms_send_code: "獲取驗證碼",
     sms_sending: "傳送中…",

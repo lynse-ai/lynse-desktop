@@ -6,7 +6,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { openUrl, openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { getCurrentWindow, LogicalSize, PhysicalPosition, availableMonitors, currentMonitor, cursorPosition } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 
 /** Window frame to restore when the permission onboarding closes. Captured
  * at enter time so a user-resized (or maximized — untouched) frame comes
@@ -639,33 +639,16 @@ export async function installTauriBridge(windowKind: string | null = null): Prom
       discardRecovery: (sessionId) => command<void>("live_translation_discard_recovery", { sessionId }),
       reprocess: (sessionId: string) =>
         command<Record<string, unknown>>("live_translation_reprocess", { sessionId }),
-      showSubtitles: (show) => command<void>("live_translation_show_subtitles", { show }),
-      // Overlay geometry presets run from the overlay webview itself, so
-      // getCurrentWindow() IS the live-subtitles window — no label lookup.
-      setSubtitleWindowPreset: async (preset) => {
-        const win = getCurrentWindow();
-        await win.setSize(preset === "stage" ? new LogicalSize(900, 420) : new LogicalSize(720, 190));
-      },
-      moveSubtitleToCursorScreen: async () => {
-        const win = getCurrentWindow();
-        const [cursor, monitors] = await Promise.all([cursorPosition(), availableMonitors()]);
-        const size = await win.innerSize();
-        const target =
-          monitors.find(
-            (monitor) =>
-              cursor.x >= monitor.position.x &&
-              cursor.x < monitor.position.x + monitor.size.width &&
-              cursor.y >= monitor.position.y &&
-              cursor.y < monitor.position.y + monitor.size.height,
-          ) ?? (await currentMonitor());
-        if (!target) return;
-        await win.setPosition(
-          new PhysicalPosition(
-            target.position.x + Math.round((target.size.width - size.width) / 2),
-            target.position.y + Math.round((target.size.height - size.height) / 2),
-          ),
-        );
-      },
+      showSubtitles: (show, preset, position) =>
+        command<void>("live_translation_show_subtitles", { show, preset, position }),
+      toggleSubtitles: (preset, position) =>
+        command<boolean>("live_translation_toggle_subtitles", { preset, position }),
+      setSubtitleWindowPreset: (preset, position) =>
+        command<void>("live_translation_set_subtitle_preset", { preset, position }),
+      setSubtitleWindowPosition: (position) =>
+        command<void>("live_translation_set_subtitle_position", { position }),
+      moveSubtitleToCursorScreen: (position) =>
+        command<void>("live_translation_move_subtitles_to_cursor_screen", { position }),
       showMainWindow: () => command<void>("live_translation_show_main"),
       // Hide the main window (close-to-tray). Rust shows the recording island
       // when a session is running, so the session stays reachable without the

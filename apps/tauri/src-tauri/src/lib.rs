@@ -4821,8 +4821,17 @@ fn build_tray_menu(
         .enabled(st.recording)
         .build(app)?;
     let show_main = MenuItemBuilder::with_id(TRAY_SHOW_MAIN_ID, "▣  显示主窗口").build(app)?;
+    let subtitles_visible = app
+        .get_webview_window("live-subtitles")
+        .map(|window| window.is_visible().unwrap_or(false))
+        .unwrap_or(false);
+    let subtitles_label = if subtitles_visible {
+        "▤  隐藏实时字幕"
+    } else {
+        "▤  显示实时字幕"
+    };
     let show_subtitles =
-        MenuItemBuilder::with_id(TRAY_SHOW_SUBTITLES_ID, "▤  显示实时字幕").build(app)?;
+        MenuItemBuilder::with_id(TRAY_SHOW_SUBTITLES_ID, subtitles_label).build(app)?;
     let quit = MenuItemBuilder::with_id(TRAY_QUIT_ID, "⏻  退出 Lynse").build(app)?;
     MenuBuilder::new(app)
         .item(&start)
@@ -5082,13 +5091,13 @@ fn set_compact_window_mode(app: AppHandle, active: bool) -> CommandResult<()> {
             let _ = main.unmaximize();
         }
     }
-    let (size, min_size) = if active {
-        ((690.0, 450.0), (560.0, 400.0))
+    let size = if active {
+        LogicalSize::new(690.0, 450.0)
     } else {
-        ((960.0, 600.0), (960.0, 600.0))
+        LogicalSize::new(960.0, 600.0)
     };
-    let _ = main.set_min_size(Some(LogicalSize::new(min_size.0, min_size.1)));
-    let _ = main.set_size(LogicalSize::new(size.0, size.1));
+    let _ = main.set_min_size(Some(size));
+    let _ = main.set_size(size);
     let _ = main.center();
     set_main_window_zoom_gated(active);
     Ok(())
@@ -5300,16 +5309,10 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                 show_main_window(app);
             }
             "show_subtitles" => {
-                let visible = app
-                    .get_webview_window("live-subtitles")
-                    .map(|window| window.is_visible().unwrap_or(false))
-                    .unwrap_or(false);
-                // The build must run off this (main-thread) menu handler —
-                // window creation deadlocks on Windows here.
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
                     if let Err(error) =
-                        live_translation::live_translation_show_subtitles(app, !visible).await
+                        live_translation::live_translation_toggle_subtitles(app, None, None).await
                     {
                         log::error!("Failed to toggle live subtitles: {error}");
                     }
@@ -5645,6 +5648,10 @@ pub fn run() {
             live_translation::live_translation_recover,
             live_translation::live_translation_discard_recovery,
             live_translation::live_translation_show_subtitles,
+            live_translation::live_translation_toggle_subtitles,
+            live_translation::live_translation_set_subtitle_preset,
+            live_translation::live_translation_set_subtitle_position,
+            live_translation::live_translation_move_subtitles_to_cursor_screen,
             live_translation::live_translation_show_main,
             live_translation::live_translation_hide_main,
             live_translation::live_translation_hide_island,

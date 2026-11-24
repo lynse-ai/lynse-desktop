@@ -11,7 +11,7 @@ export default function DashboardShell({
   return (
     <>
       <AppleFragmentBootstrap />
-      <AuthGate>
+      <AuthGate hideMoreLogin>
         <DashboardLayout>{children}</DashboardLayout>
       </AuthGate>
     </>

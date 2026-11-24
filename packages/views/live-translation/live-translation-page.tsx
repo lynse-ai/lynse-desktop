@@ -19,6 +19,7 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@lynse/ui/components/ui/alert";
 import {
   Bookmark,
+  Captions,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -589,9 +590,14 @@ export function LiveTranslationPage() {
 
   async function toggleSubtitles() {
     if (!api) return;
-    const next = !subtitlesVisible;
-    await api.showSubtitles(next);
-    setSubtitlesVisible(next);
+    if (api.toggleSubtitles) {
+      const next = await api.toggleSubtitles().catch(() => !subtitlesVisible);
+      setSubtitlesVisible(next);
+    } else {
+      const next = !subtitlesVisible;
+      await api.showSubtitles(next);
+      setSubtitlesVisible(next);
+    }
   }
 
   return (
@@ -935,6 +941,9 @@ export function LiveTranslationPage() {
                       {segment.translatedText && segment.translatedText !== segment.recognizedText && (
                         <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
                           {segment.translatedText}
+                          {!segment.isFinal && (
+                            <span className="ml-0.5 inline-block h-3.5 w-0.5 animate-pulse rounded-full bg-primary/70 align-[-2px]" />
+                          )}
                         </p>
                       )}
                     </div>
@@ -993,8 +1002,8 @@ export function LiveTranslationPage() {
                   <Square /> {t("live_translation.stop")}
                 </Button>
               )}
-              <Button variant="outline" className="ml-auto" onClick={toggleSubtitles} disabled={!active}>
-                <Volume2 />
+              <Button variant="outline" className="ml-auto" onClick={toggleSubtitles}>
+                <Captions className="size-4" />
                 {subtitlesVisible ? t("live_translation.hide_overlay") : t("live_translation.show_overlay")}
               </Button>
             </div>

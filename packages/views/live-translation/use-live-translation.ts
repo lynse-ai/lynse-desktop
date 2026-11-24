@@ -44,11 +44,7 @@ export function useLiveTranslation() {
       // Capture-layer failures (no audio device, wedged engine) happen while
       // nothing is recording, where the reducer's corner Alert is the only
       // other surface — make them a toast so the user learns WHY.
-      if (
-        event.type === "error" &&
-        stateRef.current !== "recording" &&
-        stateRef.current !== "paused"
-      ) {
+      if (event.type === "error") {
         toast.error(event.message);
       }
       dispatch(event);

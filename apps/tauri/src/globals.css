@@ -114,6 +114,11 @@ html.recording-island-window #root {
   background: transparent;
 }
 
+/* Sonner toasts should never overlay or clip inside the transparent floating island window */
+html.recording-island-window [data-sonner-toaster] {
+  display: none !important;
+}
+
 /* Windows pins the island above the taskbar and grows it upward, so the
    capsule flips: the pill hugs the pinned bottom edge while the live-transcript
    drawer unfolds above it (macOS unrolls downward from the menu bar). */

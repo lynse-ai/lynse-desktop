@@ -229,7 +229,7 @@ describe("desktop WeChat sign-in", () => {
 
       fireEvent.click(screen.getByRole("button", { name: "auth.back_to_phone" }));
       expect(screen.queryByText("auth.wechat_bind_title")).toBeNull();
-      expect(screen.getByRole("button", { name: "auth.sms_login_btn" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "auth.sms_send_code" })).toBeTruthy();
     } finally {
       warning.mockRestore();
     }
@@ -332,5 +332,172 @@ describe("desktop Apple sign-in", () => {
     await act(async () => appleCallback!("https://www.lynse.ai/bind?error=error.apple.state.invalid"));
     expect(screen.getByText("auth.apple_err_state")).toBeTruthy();
     expect(closeAuthWindow).toHaveBeenCalled();
+  });
+
+  it("renders server region switcher and allows switching between CN and Global editions", async () => {
+    localStorage.clear();
+    render(<LoginPage />);
+    const trigger = screen.getByLabelText("auth.server_region");
+    expect(trigger).toBeTruthy();
+
+    // Click trigger to open dropdown, then switch to intl
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByText("auth.region_intl"));
+    await waitFor(() => {
+      expect(localStorage.getItem("lynse_edition")).toBe("intl");
+      expect(localStorage.getItem("lynse_api_url")).toBe("https://api-en.lynse.ai");
+      expect(screen.getByPlaceholderText("auth.email_placeholder")).toBeTruthy();
+    });
+
+    // Click trigger again, then switch back to cn
+    fireEvent.click(screen.getByLabelText("auth.server_region"));
+    fireEvent.click(screen.getByText("auth.region_cn"));
+    await waitFor(() => {
+      expect(localStorage.getItem("lynse_edition")).toBe("cn");
+      expect(localStorage.getItem("lynse_api_url")).toBe("https://api.lynse.cn");
+      expect(screen.getByPlaceholderText("auth.sms_phone_placeholder")).toBeTruthy();
+    });
+  });
+
+  describe("progressive single-input (Muse style) flow", () => {
+    it("identifies phone number, requires agreement, sends SMS captcha, morphs into code input and auto-submits on 6 digits", async () => {
+      fetchMock.mockImplementation(async (url) => {
+        if (url.includes("/captcha/sms?")) return Response.json({ code: 200, data: { success: true, cooldown: 60 } });
+        if (url.includes("/login")) return Response.json({ code: 200, data: { token: "phone-token", customerId: "c1" } });
+        return Response.json({ code: 200, data: {} });
+      });
+
+      render(<LoginPage />);
+      const accountInput = screen.getByPlaceholderText("auth.sms_phone_placeholder");
+      fireEvent.change(accountInput, { target: { value: "13800000000" } });
+
+      // Clicking send before agreement shows error
+      const sendBtn = screen.getByRole("button", { name: "auth.sms_send_code" });
+      fireEvent.click(sendBtn);
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      // Check agreement
+      fireEvent.click(screen.getByRole("checkbox"));
+      fireEvent.click(sendBtn);
+
+      // Verifies captcha is requested
+      await waitFor(() => {
+        expect(fetchMock.mock.calls.some(([url]) => url.includes("/captcha/sms?"))).toBe(true);
+      });
+      const captchaCall = fetchMock.mock.calls.find(([url]) => url.includes("/captcha/sms?"))!;
+      expect(captchaCall[0]).toContain("phone=13800000000");
+
+      // Input morphs into verification code input (step: code)
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("auth.sms_code_placeholder")).toBeTruthy();
+        expect(screen.getByText("auth.edit_account")).toBeTruthy();
+      });
+
+      // Entering 6 digits triggers auto-submit
+      const codeInput = screen.getByPlaceholderText("auth.sms_code_placeholder");
+      fireEvent.change(codeInput, { target: { value: "123456" } });
+
+      await waitFor(() => {
+        expect(auth.getState().isAuthenticated).toBe(true);
+      });
+      expect(fetchMock.mock.calls.some(([url]) => url.endsWith("/login"))).toBe(true);
+    });
+
+    it("identifies email via @, sends email captcha, and allows editing account back to step 1", async () => {
+      fetchMock.mockImplementation(async (url) => {
+        if (url.includes("/captcha/email?")) return Response.json({ code: 200, data: { success: true, cooldown: 60 } });
+        return Response.json({ code: 200, data: {} });
+      });
+
+      render(<LoginPage />);
+      const accountInput = screen.getByPlaceholderText("auth.sms_phone_placeholder");
+      fireEvent.change(accountInput, { target: { value: "user@example.com" } });
+      fireEvent.click(screen.getByRole("checkbox"));
+
+      const sendBtn = screen.getByRole("button", { name: "auth.sms_send_code" });
+      fireEvent.click(sendBtn);
+
+      // Verifies email captcha is called
+      await waitFor(() => {
+        expect(fetchMock.mock.calls.some(([url]) => url.includes("/captcha/email?"))).toBe(true);
+      });
+      const captchaCall = fetchMock.mock.calls.find(([url]) => url.includes("/captcha/email?"))!;
+      expect(captchaCall[0]).toContain("email=user%40example.com");
+
+      // In step 2, click Edit to return to step 1
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("auth.sms_code_placeholder")).toBeTruthy();
+      });
+      fireEvent.click(screen.getByText("auth.edit_account"));
+
+      // Returns to step 1 with value preserved
+      expect(screen.getByPlaceholderText("auth.sms_phone_placeholder")).toHaveProperty("value", "user@example.com");
+    });
+  });
+});
+
+describe("web verification-code sign-in", () => {
+  afterEach(() => localStorage.removeItem("lynse_edition"));
+
+  it("lets a CN user change from a phone to an email during the phone resend cooldown", async () => {
+    localStorage.setItem("lynse_edition", "cn");
+    fetchMock.mockImplementation(async (url) => Response.json({
+      code: 200,
+      data: url.endsWith("/login")
+        ? { token: "email-session", customerId: "email-customer" }
+        : { success: true, cooldown: 60 },
+    }));
+    render(<LoginPage hideMoreLogin />);
+
+    const account = () => screen.getByPlaceholderText("auth.sms_phone_placeholder");
+    const code = () => screen.getByPlaceholderText("auth.sms_code_placeholder");
+    const send = () => fireEvent.click(screen.getByRole("button", { name: "auth.sms_send_code" }));
+    const apple = screen.getByRole("button", { name: "auth.apple_login" });
+    const wechat = screen.getByRole("button", { name: "auth.wechat_qr_login" });
+    expect(screen.queryByRole("button", { name: "auth.more_login" })).toBeNull();
+    expect(apple.compareDocumentPosition(wechat)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(wechat.compareDocumentPosition(account())).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(account().getAttribute("inputmode")).toBe("text");
+    expect(screen.queryByPlaceholderText("auth.sms_code_placeholder")).toBeNull();
+    fireEvent.change(account(), { target: { value: "+86 138 0000 0000" } });
+    fireEvent.click(screen.getByRole("checkbox"));
+    send();
+    await screen.findByPlaceholderText("auth.sms_code_placeholder");
+    expect(fetchMock.mock.calls[0]?.[0]).toContain("/captcha/sms?phone=13800000000");
+    fireEvent.change(code(), { target: { value: "123" } });
+    fireEvent.click(screen.getByText("auth.edit_account"));
+    send();
+    expect(code()).toHaveProperty("value", "");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByText("auth.edit_account"));
+    fireEvent.change(account(), { target: { value: "demo@example.test" } });
+    send();
+    await screen.findByPlaceholderText("auth.sms_code_placeholder");
+    expect(fetchMock.mock.calls[1]?.[0]).toContain("/captcha/email?email=demo%40example.test");
+    fireEvent.change(code(), { target: { value: "654321" } });
+    await waitFor(() => expect(auth.getState().user?.id).toBe("email-customer"));
+    expect(fetchMock.mock.calls[2]?.[1]?.body).toBe(JSON.stringify({
+      authType: "EMAIL_CODE", username: "demo@example.test", captchaCode: "654321",
+    }));
+  });
+
+  it("accepts only email on the international site", async () => {
+    localStorage.setItem("lynse_edition", "intl");
+    fetchMock.mockResolvedValue(Response.json({ code: 200, data: { success: true, cooldown: 60 } }));
+    render(<LoginPage />);
+
+    const account = screen.getByPlaceholderText("auth.email_placeholder");
+    const send = screen.getByRole("button", { name: "auth.sms_send_code" });
+    fireEvent.change(account, { target: { value: "13800000000" } });
+    expect(send).toHaveProperty("disabled", true);
+    fireEvent.keyDown(account, { key: "Enter" });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    fireEvent.change(account, { target: { value: "demo@example.test" } });
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(send);
+    await screen.findByPlaceholderText("auth.sms_code_placeholder");
+    expect(fetchMock.mock.calls[0]?.[0]).toContain("/captcha/email?");
   });
 });

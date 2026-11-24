@@ -19,7 +19,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::async_runtime::JoinHandle;
 use tauri::webview::PageLoadEvent;
 use tauri::{
-    AppHandle, Emitter, LogicalPosition, Manager, State, WebviewUrl, WebviewWindow,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, State, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
 };
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
@@ -2357,7 +2357,23 @@ fn ingest_provider_text(
         (false, false) => "translatedTempResult",
     };
     apply_method_text(segment, method, text);
-    segment.is_final = segment.recognized_final && segment.translated_final;
+    let transcript_only = session
+        .target_language
+        .read()
+        .map(|lang| lang.as_str() == "none" || lang.is_empty())
+        .unwrap_or(false);
+    let provider_has_translation = session
+        .attached_provider
+        .lock()
+        .ok()
+        .and_then(|p| p.clone())
+        .map(|p| !matches!(p.as_str(), "applespeech_local" | "tencent"))
+        .unwrap_or(true);
+    segment.is_final = if transcript_only || !provider_has_translation {
+        segment.recognized_final
+    } else {
+        segment.recognized_final && segment.translated_final
+    };
     // First-arrival stamps for the translation-lag HUD: re-issued finals must
     // not refresh the measurement, hence the is_none gate.
     if is_final {
@@ -4689,13 +4705,84 @@ pub fn live_translation_hide_main(
     Ok(())
 }
 
+/// Subtitle overlay window dimensions for presets.
+pub const SUBTITLE_DEFAULT_WIDTH: f64 = 720.0;
+pub const SUBTITLE_DEFAULT_HEIGHT: f64 = 190.0;
+pub const SUBTITLE_STAGE_WIDTH: f64 = 900.0;
+pub const SUBTITLE_STAGE_HEIGHT: f64 = 420.0;
+
+pub fn subtitle_preset_size(preset: Option<&str>) -> (f64, f64) {
+    match preset {
+        Some("stage") => (SUBTITLE_STAGE_WIDTH, SUBTITLE_STAGE_HEIGHT),
+        _ => (SUBTITLE_DEFAULT_WIDTH, SUBTITLE_DEFAULT_HEIGHT),
+    }
+}
+
+pub fn position_subtitle_window_on_monitor(
+    window: &WebviewWindow,
+    width: f64,
+    height: f64,
+    position: Option<&str>,
+    monitor: &tauri::Monitor,
+) {
+    let factor = monitor.scale_factor() as f64;
+    let mon_x = monitor.position().x as f64 / factor;
+    let mon_y = monitor.position().y as f64 / factor;
+    let mon_w = monitor.size().width as f64 / factor;
+    let mon_h = monitor.size().height as f64 / factor;
+
+    let x = mon_x + (mon_w - width).max(0.0) / 2.0;
+    let y = match position {
+        Some("top") => mon_y + 36.0,
+        Some("bottom") | None => (mon_y + mon_h - height - 48.0).max(mon_y),
+        _ => mon_y + (mon_h - height).max(0.0) / 2.0,
+    };
+
+    let _ = window.set_size(LogicalSize::new(width, height));
+    let _ = window.set_position(LogicalPosition::new(x, y));
+}
+
+fn monitor_for_cursor(app: &AppHandle) -> Option<tauri::Monitor> {
+    let cursor = app.cursor_position().ok()?;
+    let monitors = app.available_monitors().ok()?;
+    monitors.into_iter().find(|m| {
+        let pos = m.position();
+        let size = m.size();
+        cursor.x >= pos.x as f64
+            && cursor.x < (pos.x + size.width as i32) as f64
+            && cursor.y >= pos.y as f64
+            && cursor.y < (pos.y + size.height as i32) as f64
+    })
+}
+
 /// MUST stay `async`: building this window from a synchronous command
 /// deadlocks on Windows (Tauri's `WebviewWindowBuilder::build` known issue).
 #[tauri::command]
-pub async fn live_translation_show_subtitles(app: AppHandle, show: bool) -> CommandResult<()> {
+pub async fn live_translation_show_subtitles(
+    app: AppHandle,
+    show: bool,
+    preset: Option<String>,
+    position: Option<String>,
+) -> CommandResult<()> {
+    let (width, height) = subtitle_preset_size(preset.as_deref());
     if let Some(window) = app.get_webview_window("live-subtitles") {
         if show {
+            let monitor = window
+                .current_monitor()
+                .ok()
+                .flatten()
+                .or_else(|| app.primary_monitor().ok().flatten());
+            if let Some(monitor) = monitor {
+                position_subtitle_window_on_monitor(
+                    &window,
+                    width,
+                    height,
+                    position.as_deref(),
+                    &monitor,
+                );
+            }
             window.show().map_err(|error| error.to_string())?;
+            let _ = window.set_focus();
         } else {
             window.hide().map_err(|error| error.to_string())?;
         }
@@ -4704,22 +4791,150 @@ pub async fn live_translation_show_subtitles(app: AppHandle, show: bool) -> Comm
     if !show {
         return Ok(());
     }
-    WebviewWindowBuilder::new(
+    let window = WebviewWindowBuilder::new(
         &app,
         "live-subtitles",
         WebviewUrl::App("index.html?window=live-subtitles".into()),
     )
     .title("Lynse Live Subtitles")
-    .inner_size(720.0, 190.0)
+    .inner_size(width, height)
     .min_inner_size(420.0, 140.0)
     .decorations(false)
     .transparent(true)
     .always_on_top(true)
     .resizable(true)
     .skip_taskbar(true)
-    .center()
     .build()
     .map_err(|error| error.to_string())?;
+
+    let monitor = app
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.current_monitor().ok().flatten());
+    if let Some(monitor) = monitor {
+        position_subtitle_window_on_monitor(
+            &window,
+            width,
+            height,
+            position.as_deref(),
+            &monitor,
+        );
+    } else {
+        let _ = window.center();
+    }
+    Ok(())
+}
+
+/// Toggle visibility of live subtitles, returning the new visibility state.
+#[tauri::command]
+pub async fn live_translation_toggle_subtitles(
+    app: AppHandle,
+    preset: Option<String>,
+    position: Option<String>,
+) -> CommandResult<bool> {
+    let visible = app
+        .get_webview_window("live-subtitles")
+        .map(|w| w.is_visible().unwrap_or(false))
+        .unwrap_or(false);
+    live_translation_show_subtitles(app, !visible, preset, position).await?;
+    Ok(!visible)
+}
+
+/// Apply a window geometry preset to the live-subtitles window (meeting/listen/stage).
+#[tauri::command]
+pub fn live_translation_set_subtitle_preset(
+    app: AppHandle,
+    preset: String,
+    position: Option<String>,
+) -> CommandResult<()> {
+    let Some(window) = app.get_webview_window("live-subtitles") else {
+        return Ok(());
+    };
+    let (width, height) = subtitle_preset_size(Some(&preset));
+    let monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| app.primary_monitor().ok().flatten());
+    if let Some(monitor) = monitor {
+        position_subtitle_window_on_monitor(
+            &window,
+            width,
+            height,
+            position.as_deref(),
+            &monitor,
+        );
+    } else {
+        let _ = window.set_size(LogicalSize::new(width, height));
+    }
+    Ok(())
+}
+
+/// Re-anchor the subtitle overlay window to the top or bottom of the screen.
+#[tauri::command]
+pub fn live_translation_set_subtitle_position(
+    app: AppHandle,
+    position: String,
+) -> CommandResult<()> {
+    let Some(window) = app.get_webview_window("live-subtitles") else {
+        return Ok(());
+    };
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let size = window.inner_size().unwrap_or(tauri::PhysicalSize::new(
+        (SUBTITLE_DEFAULT_WIDTH * scale) as u32,
+        (SUBTITLE_DEFAULT_HEIGHT * scale) as u32,
+    ));
+    let width = size.width as f64 / scale;
+    let height = size.height as f64 / scale;
+
+    let monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| app.primary_monitor().ok().flatten());
+    if let Some(monitor) = monitor {
+        position_subtitle_window_on_monitor(
+            &window,
+            width,
+            height,
+            Some(&position),
+            &monitor,
+        );
+    }
+    Ok(())
+}
+
+/// Move the subtitle overlay window to the display currently containing the mouse cursor.
+#[tauri::command]
+pub fn live_translation_move_subtitles_to_cursor_screen(
+    app: AppHandle,
+    position: Option<String>,
+) -> CommandResult<()> {
+    let Some(window) = app.get_webview_window("live-subtitles") else {
+        return Ok(());
+    };
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let size = window.inner_size().unwrap_or(tauri::PhysicalSize::new(
+        (SUBTITLE_DEFAULT_WIDTH * scale) as u32,
+        (SUBTITLE_DEFAULT_HEIGHT * scale) as u32,
+    ));
+    let width = size.width as f64 / scale;
+    let height = size.height as f64 / scale;
+
+    let target_monitor = monitor_for_cursor(&app)
+        .or_else(|| window.current_monitor().ok().flatten())
+        .or_else(|| app.primary_monitor().ok().flatten());
+
+    if let Some(monitor) = target_monitor {
+        position_subtitle_window_on_monitor(
+            &window,
+            width,
+            height,
+            position.as_deref(),
+            &monitor,
+        );
+    }
     Ok(())
 }
 
@@ -5902,6 +6117,94 @@ mod tests {
             panic!("text+stash partial must produce a segment update");
         };
         assert_eq!(segment.recognized_text, "今天天气真好");
+    }
+
+    #[test]
+    fn merge_streaming_chunk_handles_incremental_cumulative_and_english() {
+        use protocols::merge_streaming_chunk;
+
+        // Chinese incremental delta stream
+        let mut acc = String::new();
+        merge_streaming_chunk(&mut acc, "今天");
+        merge_streaming_chunk(&mut acc, "天气");
+        merge_streaming_chunk(&mut acc, "真好");
+        assert_eq!(acc, "今天天气真好");
+
+        // Cumulative updates
+        let mut acc_cum = String::new();
+        merge_streaming_chunk(&mut acc_cum, "今天");
+        merge_streaming_chunk(&mut acc_cum, "今天天气");
+        merge_streaming_chunk(&mut acc_cum, "今天天气真好");
+        assert_eq!(acc_cum, "今天天气真好");
+
+        // English tokens without space
+        let mut acc_en = String::new();
+        merge_streaming_chunk(&mut acc_en, "Hello");
+        merge_streaming_chunk(&mut acc_en, "world");
+        merge_streaming_chunk(&mut acc_en, ",");
+        merge_streaming_chunk(&mut acc_en, "how");
+        merge_streaming_chunk(&mut acc_en, "are");
+        merge_streaming_chunk(&mut acc_en, "you");
+        assert_eq!(acc_en, "Hello world, how are you");
+
+        // Duplicate frame ignored
+        let mut acc_dup = "今天天气真好".to_owned();
+        merge_streaming_chunk(&mut acc_dup, "今天天气真好");
+        assert_eq!(acc_dup, "今天天气真好");
+    }
+
+    #[test]
+    fn qwen_streaming_deltas_accumulate_into_live_utterance() {
+        let session = live_session();
+        let mut proto = protocols::dashscope::DashScopeProtocol::new(
+            "test_key".to_owned(),
+            Default::default(),
+            false,
+        );
+        let ctx = protocols::ProtocolCtx {
+            session: &session,
+            source: AudioSource::Mic,
+            epoch: 0,
+            epoch_offset_ms: 0,
+        };
+
+        let chunk1 = r#"{"type":"conversation.item.input_audio_transcription.delta","delta":"今天"}"#;
+        let e1 = proto.apply_message(&ctx, chunk1);
+        let Some(ProviderEmission::Segment(s1)) = e1 else { panic!("expected segment"); };
+        assert_eq!(s1.recognized_text, "今天");
+        assert!(!s1.is_final);
+
+        let chunk2 = r#"{"type":"conversation.item.input_audio_transcription.delta","delta":"天气"}"#;
+        let e2 = proto.apply_message(&ctx, chunk2);
+        let Some(ProviderEmission::Segment(s2)) = e2 else { panic!("expected segment"); };
+        assert_eq!(s2.recognized_text, "今天天气");
+        assert!(!s2.is_final);
+
+        let chunk3 = r#"{"type":"conversation.item.input_audio_transcription.delta","delta":"真好"}"#;
+        let e3 = proto.apply_message(&ctx, chunk3);
+        let Some(ProviderEmission::Segment(s3)) = e3 else { panic!("expected segment"); };
+        assert_eq!(s3.recognized_text, "今天天气真好");
+        assert!(!s3.is_final);
+
+        // Streaming translation deltas
+        let t_chunk1 = r#"{"type":"response.text.delta","delta":"Today"}"#;
+        let et1 = proto.apply_message(&ctx, t_chunk1);
+        let Some(ProviderEmission::Segment(st1)) = et1 else { panic!("expected segment"); };
+        assert_eq!(st1.translated_text, "Today");
+
+        let t_chunk2 = r#"{"type":"response.text.delta","delta":" the weather"}"#;
+        let et2 = proto.apply_message(&ctx, t_chunk2);
+        let Some(ProviderEmission::Segment(st2)) = et2 else { panic!("expected segment"); };
+        assert_eq!(st2.translated_text, "Today the weather");
+
+        // Speech finalization
+        let completed = r#"{"type":"conversation.item.input_audio_transcription.completed","transcript":"今天天气真好"}"#;
+        let ec = proto.apply_message(&ctx, completed);
+        assert!(ec.is_some());
+
+        let done = r#"{"type":"response.text.done","text":"Today the weather is nice."}"#;
+        let ed = proto.apply_message(&ctx, done);
+        assert!(ed.is_some());
     }
 
     #[test]

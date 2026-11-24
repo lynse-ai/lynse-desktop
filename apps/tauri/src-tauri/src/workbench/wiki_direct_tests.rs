@@ -325,7 +325,7 @@ async fn run(
         sources: &sources,
         evidence: &evidence,
     };
-    run_pipeline(&client, direct, request, report).await
+    run_pipeline(&client, direct, request, report, None).await
 }
 
 #[tokio::test]

@@ -7,6 +7,8 @@
 //! text.
 
 use serde_json::{json, Value};
+use tauri::AppHandle;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TranslateKind {
@@ -69,6 +71,31 @@ pub async fn translate(
     qwen_key: Option<&str>,
     qwen_endpoint: Option<&str>,
 ) -> Result<TranslateOutcome, String> {
+    translate_with_observability(
+        None,
+        text,
+        source,
+        target,
+        kind,
+        providers,
+        ling_key,
+        qwen_key,
+        qwen_endpoint,
+    )
+    .await
+}
+
+pub async fn translate_with_observability(
+    app: Option<&AppHandle>,
+    text: &str,
+    source: &str,
+    target: &str,
+    kind: TranslateKind,
+    providers: &[String],
+    ling_key: Option<&str>,
+    qwen_key: Option<&str>,
+    qwen_endpoint: Option<&str>,
+) -> Result<TranslateOutcome, String> {
     if text.trim().is_empty() {
         return Err("text is empty".to_owned());
     }
@@ -79,6 +106,7 @@ pub async fn translate(
             attempts: vec![],
         });
     }
+    let trace_id = Uuid::new_v4().to_string();
     let mut attempts = Vec::new();
     for provider in providers {
         let name = provider.trim().to_lowercase();
@@ -92,6 +120,41 @@ pub async fn translate(
             "apple" => translate_via_apple(text.to_owned(), source, target).await,
             other => Err(format!("unknown translation provider: {other}")),
         };
+        let observability = match name.as_str() {
+            "ling" => Some((
+                "Ling-3.1-flash",
+                "ling",
+                json!([
+                    {"role": "system", "content": format!(
+                        "Translate live meeting subtitles from {} to {}.\n{}",
+                        source,
+                        target,
+                        kind.instruction(),
+                    )},
+                    {"role": "user", "content": text},
+                ]),
+            )),
+            "qwen_mt" => Some((
+                QWEN_MT_MODEL,
+                "alibaba",
+                json!([{"role": "user", "content": text}]),
+            )),
+            _ => None,
+        };
+        if let (Some(app), Some((model, provider, input))) = (app, observability) {
+            crate::ai_observability::capture_generation(
+                app,
+                &trace_id,
+                None,
+                model,
+                provider,
+                input,
+                result.as_ref().ok().cloned(),
+                started.elapsed().as_secs_f64(),
+                None,
+                result.as_ref().err().cloned(),
+            );
+        }
         match result {
             Ok(translated) => {
                 attempts.push(json!({
@@ -277,7 +340,8 @@ async fn translate_via_qwen_mt(
 }
 
 /// Cheapest possible Ling call (1 token) to validate a stored key.
-pub async fn check_ling_key(key: &str) -> Result<u64, String> {
+pub async fn check_ling_key(app: &AppHandle, key: &str) -> Result<u64, String> {
+    let trace_id = Uuid::new_v4().to_string();
     let body = json!({
         "model": "Ling-3.0-tiny",
         "messages": [{"role": "user", "content": "hi"}],
@@ -289,20 +353,51 @@ pub async fn check_ling_key(key: &str) -> Result<u64, String> {
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|error| error.to_string())?;
-    let response = client
+    let response = match client
         .post("https://api.ant-ling.com/v1/chat/completions")
         .bearer_auth(key.trim())
         .json(&body)
         .send()
         .await
-        .map_err(|error| format!("network: {error}"))?;
+    {
+        Ok(response) => response,
+        Err(error) => {
+            let error = format!("network: {error}");
+            crate::ai_observability::capture_generation(
+                app,
+                &trace_id,
+                None,
+                "Ling-3.0-tiny",
+                "ling",
+                json!([{"role": "user", "content": "hi"}]),
+                None,
+                started.elapsed().as_secs_f64(),
+                None,
+                Some(error.clone()),
+            );
+            return Err(error);
+        }
+    };
     let status = response.status().as_u16();
-    match status {
+    let result = match status {
         200 => Ok(started.elapsed().as_millis() as u64),
         401 | 403 => Err("invalidKey".to_owned()),
         429 => Ok(started.elapsed().as_millis() as u64), // rate-limited = valid
         code => Err(format!("http{code}")),
-    }
+    };
+    crate::ai_observability::capture_generation(
+        app,
+        &trace_id,
+        None,
+        "Ling-3.0-tiny",
+        "ling",
+        json!([{"role": "user", "content": "hi"}]),
+        None,
+        started.elapsed().as_secs_f64(),
+        Some(status),
+        (status != 200).then(|| "model validation request did not complete".to_owned()),
+    );
+    result
 }
 
 /// Google Translate's public web endpoint (client=gtx) — unofficial, no key,

@@ -5,4 +5,8 @@ interface ImportMetaEnv {
   readonly VITE_BUILD_CHANNEL?: string;
   /** CloudBase cnb-report function URL (defaults to the deployed prod one). */
   readonly VITE_CNB_REPORT_URL?: string;
+  /** Public PostHog project token for the renderer. */
+  readonly VITE_POSTHOG_KEY?: string;
+  /** PostHog ingestion host for the renderer. */
+  readonly VITE_POSTHOG_HOST?: string;
 }

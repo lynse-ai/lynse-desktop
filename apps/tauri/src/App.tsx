@@ -1,6 +1,7 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect, useRef } from "react";
 import { CoreProvider } from "@lynse/core/platform";
 import { configureLynseSso } from "@lynse/core/auth/lynse-sso";
+import { useAuthStore } from "@lynse/core/auth";
 import { ThemeProvider } from "@lynse/ui/components/common/theme-provider";
 import { Toaster } from "@lynse/ui/components/ui/sonner";
 import { AuthGate } from "@lynse/views/auth/auth-gate";
@@ -22,6 +23,7 @@ import { setReportChannel } from "@lynse/views/diagnostics";
 import type { DesktopApi } from "./tauri-bridge";
 import { Loading } from "./Loading";
 import { withPrivatePluginLocales } from "./private-plugins";
+import { posthog } from "./posthog";
 
 const resources = withPrivatePluginLocales(RESOURCES);
 
@@ -83,11 +85,39 @@ function WorkbenchPanel() {
   return open ? <Suspense><WorkbenchDialog /></Suspense> : null;
 }
 
+function PostHogIdentity() {
+  const user = useAuthStore((state) => state.user);
+  const identifiedUserId = useRef<string | null | undefined>(undefined);
+
+  useEffect(() => {
+    if (user?.id) {
+      if (identifiedUserId.current !== user.id) {
+        if (identifiedUserId.current) posthog.reset();
+        posthog.identify(user.id, {
+          ...(user.email ? { email: user.email } : {}),
+          ...(user.name ? { name: user.name } : {}),
+        });
+        identifiedUserId.current = user.id;
+      }
+      return;
+    }
+
+    // Clear a prior account's persisted identity on logout and at a signed-out launch.
+    if (identifiedUserId.current !== null) {
+      posthog.reset();
+      identifiedUserId.current = null;
+    }
+  }, [user?.email, user?.id, user?.name]);
+
+  return null;
+}
+
 function MainWindow() {
   useWebdavAutoSync();
   useMaximized();
   return (
     <DesktopNavigationProvider>
+      <PostHogIdentity />
       {/* Supervisors also handle logout, after the dashboard has unmounted. */}
       <BotAuthSupervisor />
       <WorkbenchSupervisor />

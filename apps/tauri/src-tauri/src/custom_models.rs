@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::Duration;
 use tauri::AppHandle;
+use uuid::Uuid;
 
 const ACCOUNT_PREFIX: &str = "custom-model-key-";
 const MAX_PROFILE_ID_CHARS: usize = 64;
@@ -140,7 +141,7 @@ pub async fn custom_model_complete(
     app: AppHandle,
     request: CompletionRequest,
 ) -> Result<String, CompletionError> {
-    complete(&app, request, Duration::from_secs(300)).await
+    complete(&app, request, Duration::from_secs(300), &Uuid::new_v4().to_string()).await
 }
 
 #[tauri::command]
@@ -157,7 +158,7 @@ pub async fn custom_model_test_connection(
         max_tokens: Some(256),
         temperature: None,
     };
-    complete(&app, request, Duration::from_secs(30))
+    complete(&app, request, Duration::from_secs(30), &Uuid::new_v4().to_string())
         .await
         .map(|_| ())
 }
@@ -166,6 +167,7 @@ async fn complete(
     app: &AppHandle,
     request: CompletionRequest,
     timeout: Duration,
+    trace_id: &str,
 ) -> Result<String, CompletionError> {
     let key = key(app, &request.endpoint.profile_id)
         .await
@@ -182,7 +184,7 @@ async fn complete(
     }
     let path = format!("{}/chat/completions", endpoint.path().trim_end_matches('/'));
     endpoint.set_path(&path);
-    let model = request.endpoint.model.trim();
+    let model = request.endpoint.model.trim().to_owned();
     if model.is_empty() {
         return Err(CompletionError::InvalidModel);
     }
@@ -199,18 +201,52 @@ async fn complete(
     if let Some(temperature) = request.temperature {
         body["temperature"] = json!(temperature);
     }
+    let input = body["messages"].clone();
     let client = reqwest::Client::builder()
         .timeout(timeout)
         .build()
         .map_err(CompletionError::from_request)?;
-    let response = client
+    let started = std::time::Instant::now();
+    let response = match client
         .post(endpoint)
         .bearer_auth(key)
         .json(&body)
         .send()
         .await
-        .map_err(CompletionError::from_request)?;
-    read_completion(response).await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            let error = CompletionError::from_request(error);
+            crate::ai_observability::capture_generation(
+                app,
+                trace_id,
+                None,
+                &model,
+                "openai-compatible",
+                input,
+                None,
+                started.elapsed().as_secs_f64(),
+                None,
+                Some(format!("{error:?}")),
+            );
+            return Err(error);
+        }
+    };
+    let status = response.status().as_u16();
+    let result = read_completion(response).await;
+    crate::ai_observability::capture_generation(
+        app,
+        trace_id,
+        None,
+        &model,
+        "openai-compatible",
+        input,
+        result.as_ref().ok().cloned(),
+        started.elapsed().as_secs_f64(),
+        Some(status),
+        result.as_ref().err().map(|error| format!("{error:?}")),
+    );
+    result
 }
 
 async fn read_completion(response: reqwest::Response) -> Result<String, CompletionError> {

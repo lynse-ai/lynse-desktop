@@ -33,6 +33,7 @@
     "@tauri-apps/plugin-process": "^2.0.0",
     "@tauri-apps/plugin-updater": "^2.0.0",
     "@vitejs/plugin-react": "^5.1.1",
+    "posthog-js": "^1.454.2",
     "react": "catalog:",
     "react-dom": "catalog:",
     "tailwindcss": "^4",
@@ -41,9 +42,9 @@
   "devDependencies": {
     "@lynse/tsconfig": "workspace:*",
     "@tailwindcss/vite": "^4",
+    "@tauri-apps/cli": "^2.0.0",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
-    "@tauri-apps/cli": "^2.0.0",
     "typescript": "catalog:",
     "vite": "^8.0.0",
     "vitest": "catalog:"

@@ -1848,12 +1848,46 @@ fn thinking_switch_family(model: &str) -> Option<(&'static str, &'static std::sy
     }
 }
 
+struct AiContext<'a> {
+    app: &'a AppHandle,
+    session_id: String,
+    trace_id: String,
+}
+
+fn capture_failure(
+    ai: Option<&AiContext<'_>>,
+    direct: &DirectModel,
+    messages: &[(&str, String)],
+    latency_seconds: f64,
+    http_status: Option<u16>,
+    error: &str,
+) {
+    if let Some(ai) = ai {
+        crate::ai_observability::capture_generation(
+            ai.app,
+            &ai.trace_id,
+            Some(&ai.session_id),
+            &direct.model,
+            "openai-compatible",
+            json!(messages
+                .iter()
+                .map(|(role, content)| json!({"role": role, "content": content}))
+                .collect::<Vec<_>>()),
+            None,
+            latency_seconds,
+            http_status,
+            Some(error.to_owned()),
+        );
+    }
+}
+
 async fn generate(
     client: &reqwest::Client,
     direct: &DirectModel,
     messages: &[(&str, String)],
     timeout: Duration,
     report: &mut SynthesisControl,
+    ai: Option<&AiContext<'_>>,
 ) -> Result<String, DirectError> {
     let family = thinking_switch_family(&direct.model);
     let endpoint = format!("{}/chat/completions", direct.base_url.trim_end_matches('/'));
@@ -1888,6 +1922,14 @@ async fn generate(
             Ok(response) => {
                 let status = response.status().as_u16();
                 if switch_thinking && matches!(status, 400 | 404 | 422) {
+                    capture_failure(
+                        ai,
+                        direct,
+                        messages,
+                        started.elapsed().as_secs_f64(),
+                        Some(status),
+                        "model rejected the thinking parameter",
+                    );
                     if let Some((name, rejected)) = family {
                         rejected.store(true, std::sync::atomic::Ordering::Relaxed);
                         log::warn!(
@@ -1916,6 +1958,7 @@ async fn generate(
                     "[wiki-direct] provider transport failure ({kind}) after {:.1}s",
                     waited.as_secs_f64()
                 );
+                capture_failure(ai, direct, messages, waited.as_secs_f64(), None, "model transport failed");
                 return Err(if super::transport_may_have_submitted(
                     error.is_connect(),
                     error.is_timeout(),
@@ -1937,6 +1980,7 @@ async fn generate(
     if status == 429 {
         let retry = retry_after.or(report.retry_after).unwrap_or(60).max(1);
         report.retry_after = Some(retry);
+        capture_failure(ai, direct, messages, started.elapsed().as_secs_f64(), Some(status), "model rate limited");
         return Err(DirectError::RateLimited);
     }
     if !(200..300).contains(&status) {
@@ -1953,11 +1997,15 @@ async fn generate(
             })
             .unwrap_or_default();
         log::warn!("[wiki-direct] provider HTTP {status}: {body}");
+        capture_failure(ai, direct, messages, started.elapsed().as_secs_f64(), Some(status), "model request failed");
         return Err(DirectError::Service(status));
     }
     let response_bytes = match response.bytes().await {
         Ok(bytes) => bytes,
-        Err(_) => return Err(DirectError::Unknown),
+        Err(_) => {
+            capture_failure(ai, direct, messages, started.elapsed().as_secs_f64(), Some(status), "model response read failed");
+            return Err(DirectError::Unknown);
+        }
     };
     let value: Value = match serde_json::from_slice(&response_bytes) {
         Ok(value) => value,
@@ -1971,6 +2019,7 @@ async fn generate(
                 status,
                 response_bytes.len()
             );
+            capture_failure(ai, direct, messages, started.elapsed().as_secs_f64(), Some(status), "invalid model response");
             return Err(DirectError::Unknown);
         }
     };
@@ -1999,6 +2048,7 @@ async fn generate(
             .unwrap_or(0),
     );
     if choice.get("finish_reason").and_then(Value::as_str) == Some("length") {
+        capture_failure(ai, direct, messages, started.elapsed().as_secs_f64(), Some(status), "model output truncated");
         return Err(DirectError::Truncated);
     }
     match choice
@@ -2006,8 +2056,30 @@ async fn generate(
         .and_then(|message| message.get("content"))
         .and_then(Value::as_str)
     {
-        Some(content) => Ok(content.to_owned()),
-        None => Err(DirectError::Unknown),
+        Some(content) => {
+            if let Some(ai) = ai {
+                crate::ai_observability::capture_generation(
+                    ai.app,
+                    &ai.trace_id,
+                    Some(&ai.session_id),
+                    &direct.model,
+                    "openai-compatible",
+                    json!(messages
+                        .iter()
+                        .map(|(role, content)| json!({"role": role, "content": content}))
+                        .collect::<Vec<_>>()),
+                    Some(content.to_owned()),
+                    started.elapsed().as_secs_f64(),
+                    Some(status),
+                    None,
+                );
+            }
+            Ok(content.to_owned())
+        }
+        None => {
+            capture_failure(ai, direct, messages, started.elapsed().as_secs_f64(), Some(status), "model response was empty");
+            Err(DirectError::Unknown)
+        }
     }
 }
 
@@ -2068,6 +2140,7 @@ pub(super) async fn run_pipeline(
     direct: &DirectModel,
     request: PipelineRequest<'_>,
     report: &mut SynthesisControl,
+    ai: Option<&AiContext<'_>>,
 ) -> CommandResult<Value> {
     let task = request.task;
     let language = match request.language {
@@ -2257,6 +2330,7 @@ pub(super) async fn run_pipeline(
         bank.as_ref(),
         &messages,
         report,
+        ai,
     )
     .await
     {
@@ -2280,8 +2354,9 @@ async fn run_with_correction(
     bank: Option<&CitationBank>,
     messages: &[(&'static str, String)],
     report: &mut SynthesisControl,
+    ai: Option<&AiContext<'_>>,
 ) -> Result<Value, Outcome> {
-    let text = match generate(client, direct, messages, FIRST_ATTEMPT_TIMEOUT, report).await {
+    let text = match generate(client, direct, messages, FIRST_ATTEMPT_TIMEOUT, report, ai).await {
         Ok(text) => text,
         Err(DirectError::Truncated) => {
             // A reasoning-heavy endpoint can spend the whole completion
@@ -2290,7 +2365,7 @@ async fn run_with_correction(
             log::warn!("[wiki-direct] output truncated; retrying once with a brevity instruction");
             let mut retried = messages.to_vec();
             retried.push(("user", "Your previous answer was cut off before it was complete. Return the same JSON object but much shorter: fewer items (at most 10), at most 2 citations per item, and every quote under 120 characters. Keep the JSON well-formed and complete.".to_owned()));
-            match generate(client, direct, &retried, CORRECTION_TIMEOUT, report).await {
+            match generate(client, direct, &retried, CORRECTION_TIMEOUT, report, ai).await {
                 Ok(text) => text,
                 Err(error) => return Err(Outcome::Service(error)),
             }
@@ -2347,7 +2422,7 @@ async fn run_with_correction(
         }
         return Err(Outcome::Invalid(failure, false));
     }
-    let corrected_text = match generate(client, direct, &corrected, CORRECTION_TIMEOUT, report)
+    let corrected_text = match generate(client, direct, &corrected, CORRECTION_TIMEOUT, report, ai)
         .await
     {
         Ok(text) => text,
@@ -2392,7 +2467,12 @@ pub(super) async fn synthesize_direct(
         sources: &payload["sources"],
         evidence: &payload["evidence"],
     };
-    run_pipeline(&client, &direct, request, report).await
+    let ai = AiContext {
+        app,
+        session_id: crate::ai_observability::session_id(&session.scope),
+        trace_id: uuid::Uuid::new_v4().to_string(),
+    };
+    run_pipeline(&client, &direct, request, report, Some(&ai)).await
 }
 
 #[cfg(test)]

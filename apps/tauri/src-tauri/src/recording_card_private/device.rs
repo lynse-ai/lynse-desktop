@@ -28,7 +28,6 @@ pub const DEFAULT_PRODUCT_ID: u16 = 0x4155;
 
 const CONTROL_REQUEST_OUT: u8 = 0x12;
 const CONTROL_REQUEST_IN: u8 = 0x13;
-#[cfg(not(target_os = "windows"))]
 const FALLBACK_CONFIGURATION: u8 = 1;
 const FALLBACK_INTERFACE: u8 = 0;
 const FALLBACK_BULK_ENDPOINT_OUT: u8 = 0x02;
@@ -54,7 +53,14 @@ pub enum DeviceError {
 
 impl From<nusb::Error> for DeviceError {
     fn from(value: nusb::Error) -> Self {
-        DeviceError::Usb(value.to_string())
+        let msg = value.to_string();
+        if msg.contains("incompatible driver") {
+            DeviceError::Usb(format!(
+                "{msg} (Windows 系统下该设备需要绑定 WinUSB 驱动，请检查设备驱动或使用 Zadig 安装 WinUSB 驱动)"
+            ))
+        } else {
+            DeviceError::Usb(msg)
+        }
     }
 }
 
@@ -168,30 +174,19 @@ impl CardDevice {
             info.product_id()
         );
         let device = info.open().await?;
-        #[cfg(target_os = "windows")]
-        let (configurations, fallback_configuration) = {
-            // WinUSB uses the configuration selected by Windows.
-            let active = device.active_configuration().map_err(nusb::Error::from)?;
-            let value = active.configuration_value();
-            ([active], value)
-        };
-        #[cfg(not(target_os = "windows"))]
-        let (configurations, fallback_configuration) =
-            (device.configurations(), FALLBACK_CONFIGURATION);
-
         let (configuration, interface_number, bulk_out_address, bulk_in_address) =
-            match find_vendor_interface(configurations) {
+            match find_vendor_interface(device.configurations()) {
                 Some(found) => found,
                 None => {
                     log::warn!(
                         "[recording-card] vendor bulk interface not found; using fallback config={} interface={} OUT=0x{:02x} IN=0x{:02x}",
-                        fallback_configuration,
+                        FALLBACK_CONFIGURATION,
                         FALLBACK_INTERFACE,
                         FALLBACK_BULK_ENDPOINT_OUT,
                         FALLBACK_BULK_ENDPOINT_IN
                     );
                     (
-                        fallback_configuration,
+                        FALLBACK_CONFIGURATION,
                         FALLBACK_INTERFACE,
                         FALLBACK_BULK_ENDPOINT_OUT,
                         FALLBACK_BULK_ENDPOINT_IN,

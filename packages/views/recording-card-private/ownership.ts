@@ -11,6 +11,12 @@ const messages = {
 } satisfies Record<string, string>;
 
 export function ownershipErrorKey(message: string) {
+  if (message.includes("incompatible driver") || message.includes("WinUSB")) {
+    return "recordingCard.incompatible_driver";
+  }
+  if (message.includes("recording card not found")) {
+    return "recordingCard.device_not_found";
+  }
   return Object.entries(messages).find(([code]) => code === message)?.[1];
 }
 

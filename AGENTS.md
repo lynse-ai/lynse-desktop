@@ -79,9 +79,9 @@ pnpm --filter @lynse/tauri build       # Build + bundle into .app/.dmg (Rust + V
 - Use shadcn design tokens for styling. Avoid hardcoded color values.
 - If a component is identical between web and desktop, it belongs in a shared package.
 
-## Private recording-card plugin
+## Recording-card plugin
 
-The recording-card (device management) plugin is closed-source and lives outside git in gitignored paths (`recording_card_private/`, `recording-card-private/`, `private-plugins/`, web `(private-plugins)` routes, verifier archives, `.recording-card-ownership/`). Builds auto-detect these inputs: present → the plugin compiles in (`#[cfg(private_recording_card)]` + vite alias); absent → the build falls back to public stubs with no device page. `LYNSE_REQUIRE_PRIVATE_RECORDING_CARD=1` makes a build fail instead of silently skipping the plugin. Never commit content from those paths into the public repo.
+The recording-card (device management) plugin is tracked directly in the repository (`src/recording_card_private/`, `recording-card-private/`, `private-plugins/`, verifier archives, etc.) and compiles into desktop builds. `LYNSE_REQUIRE_PRIVATE_RECORDING_CARD=1` enforces that plugin sources must be present during build.
 
 ## Navigation
 

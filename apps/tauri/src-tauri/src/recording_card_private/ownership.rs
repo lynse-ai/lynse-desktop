@@ -127,7 +127,10 @@ static CLIENT: LazyLock<Result<reqwest::Client, reqwest::Error>> = LazyLock::new
 pub struct CardAccess {
     pub api_base_url: String,
     pub token: String,
+    #[serde(default)]
     pub gateway_url: Option<String>,
+    #[serde(default)]
+    pub agent_base_url: Option<String>,
 }
 
 pub struct CardCredential {
@@ -190,17 +193,19 @@ impl CardAccount {
     }
 
     pub(super) fn credential_gateway(&self, access: &CardAccess) -> String {
+        if let Some(agent) = &access.agent_base_url {
+            let trimmed = agent.trim().trim_end_matches('/');
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
         if let Some(gw) = &access.gateway_url {
             let trimmed = gw.trim().trim_end_matches('/');
             if !trimmed.is_empty() {
                 return trimmed.to_string();
             }
         }
-        match self.gateway {
-            "https://api.lynse.cn" | "https://gapp.lynse.cn" => "https://www.lynse.cn".to_string(),
-            "https://api-en.lynse.ai" => "https://www.lynse.ai".to_string(),
-            other => other.to_string(),
-        }
+        "https://lynclaw-api-319577-10-1401959758.sh.run.tcloudbase.com".to_string()
     }
 
     pub(super) async fn fetch_credential(
@@ -222,28 +227,19 @@ impl CardAccount {
         token_header.set_sensitive(true);
 
         let gateway_origin = self.credential_gateway(access);
-        let endpoint = format!(
-            "{}/platform/oauth/api/agent/device/recording-card/credential",
-            gateway_origin
-        );
+        let endpoint = format!("{}/api/desktop/recording-card/config", gateway_origin);
 
         let send_req = |client: &reqwest::Client| {
-            let mut req = client
-                .post(&endpoint)
+            client
+                .get(&endpoint)
                 .header(AUTHORIZATION, token_header.clone())
-                .header(CACHE_CONTROL, "no-cache, no-store");
-            if let (Some(vid), Some(pid)) = (vendor_id, product_id) {
-                req = req.json(&serde_json::json!({
-                    "vendorId": vid,
-                    "productId": pid,
-                }));
-            }
-            req.send()
+                .header(CACHE_CONTROL, "no-cache, no-store")
+                .send()
         };
 
         // Attempt with certificate-pinned secure client first, but gracefully fall back
         // to standard client if Schannel (Windows) or proxy causes TLS handshake failure.
-        let response = match SECURE_CLIENT.as_ref() {
+        let mut response = match SECURE_CLIENT.as_ref() {
             Ok(sec_client) => match send_req(sec_client).await {
                 Ok(resp) => resp,
                 Err(e) => {
@@ -270,6 +266,31 @@ impl CardAccount {
                 })?
             }
         };
+
+        // If the assistant config route returned 404, attempt fallback to legacy MCP credential route
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            let mcp_origin = match self.gateway {
+                "https://api.lynse.cn" | "https://gapp.lynse.cn" => "https://www.lynse.cn",
+                "https://api-en.lynse.ai" => "https://www.lynse.ai",
+                other => other,
+            };
+            let mcp_endpoint = format!(
+                "{}/platform/oauth/api/agent/device/recording-card/credential",
+                mcp_origin
+            );
+            if let Ok(std_client) = CLIENT.as_ref() {
+                let mut req = std_client
+                    .post(&mcp_endpoint)
+                    .header(AUTHORIZATION, token_header.clone())
+                    .header(CACHE_CONTROL, "no-cache, no-store");
+                if let (Some(vid), Some(pid)) = (vendor_id, product_id) {
+                    req = req.json(&serde_json::json!({ "vendorId": vid, "productId": pid }));
+                }
+                if let Ok(resp) = req.send().await {
+                    response = resp;
+                }
+            }
+        }
 
         match response.status().as_u16() {
             401 => {

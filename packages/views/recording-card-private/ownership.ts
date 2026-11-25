@@ -8,6 +8,7 @@ const messages = {
   recording_card_not_bound: "recordingCard.not_bound",
   recording_card_not_owned: "recordingCard.not_owned",
   recording_card_verification_unavailable: "recordingCard.verification_unavailable",
+  recording_card_auth_failed: "recordingCard.auth_failed",
 } satisfies Record<string, string>;
 
 export function ownershipErrorKey(message: string) {
@@ -17,14 +18,21 @@ export function ownershipErrorKey(message: string) {
   if (message.includes("recording card not found")) {
     return "recordingCard.device_not_found";
   }
-  return Object.entries(messages).find(([code]) => code === message)?.[1];
+  if (message.includes("口令校验失败") || message.includes("password handshake failed")) {
+    return "recordingCard.auth_failed";
+  }
+  return Object.entries(messages).find(([code]) => message.includes(code))?.[1];
 }
 
 export function getRecordingCardAccess() {
   const client = api();
   const token = client.getToken();
   if (!token) throw new Error("recording_card_account_required");
-  return { apiBaseUrl: client.getBaseUrl(), token };
+  return {
+    apiBaseUrl: client.getBaseUrl(),
+    agentBaseUrl: typeof client.getAgentBaseUrl === "function" ? client.getAgentBaseUrl() ?? undefined : undefined,
+    token,
+  };
 }
 
 type CardAccess = ReturnType<typeof getRecordingCardAccess>;

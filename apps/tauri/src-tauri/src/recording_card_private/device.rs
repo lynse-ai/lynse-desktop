@@ -207,13 +207,9 @@ impl CardDevice {
         let bulk_out = interface
             .endpoint::<Bulk, Out>(bulk_out_address)
             .map_err(|e| DeviceError::Usb(e.to_string()))?;
-        let mut bulk_in = interface
+        let bulk_in = interface
             .endpoint::<Bulk, In>(bulk_in_address)
             .map_err(|e| DeviceError::Usb(e.to_string()))?;
-
-        // Drain startup noise before the handshake. The SDK reads a few
-        // frames the device emits on open; tolerate a short quiet wait here.
-        Self::drain_quiet(&mut bulk_in).await;
 
         // WinUSB validates the interface number in wIndex.
         let interface_index = u16::from(interface_number);
@@ -265,23 +261,6 @@ impl CardDevice {
 
     pub fn is_authenticated(&self) -> bool {
         self.authenticated
-    }
-
-    async fn drain_quiet(ep: &mut Endpoint<Bulk, In>) {
-        // Best-effort short read of startup frames; a timeout here is normal
-        // and must not fail the connection.
-        // Bulk IN requests use a whole number of endpoint packets.
-        ep.submit(Buffer::new(ep.max_packet_size()));
-        match tokio::time::timeout(READ_TIMEOUT, ep.next_complete()).await {
-            Ok(completion) => match completion.into_result() {
-                Ok(_) => log::info!("[recording-card] drained a startup bulk frame"),
-                Err(error) => log::debug!("[recording-card] startup bulk read failed: {error}"),
-            },
-            Err(_) => {
-                ep.cancel_all();
-                let _ = ep.next_complete().await.into_result();
-            }
-        }
     }
 
     /// Write a raw frame to the vendor bulk OUT endpoint.

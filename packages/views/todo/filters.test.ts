@@ -1,6 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyTodoFilter, collectOwners, matchesSmartFilter, searchTodos, type SmartFilter } from "./filters";
 import type { TodoItem } from "./todo-api";
+
+// Freeze "now" so relative date fixtures are deterministic: the week bucket
+// spans Sunday-start and its edges (running on Thu/Sat/Sun) otherwise push
+// fixed offsets into the wrong bucket.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-11-25T12:00:00")); // a Wednesday
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 /** Local yyyy-MM-dd offset from today (negative = past). */
 function dateOnly(offsetDays: number): string {
@@ -21,12 +32,23 @@ function todo(overrides: Partial<TodoItem>): TodoItem {
 }
 
 describe("matchesSmartFilter", () => {
-  const overdue = todo({ id: "a", dueDate: dateOnly(-1) });
-  const today = todo({ id: "b", dueDate: dateOnly(0) });
-  const week = todo({ id: "c", dueDate: dateOnly(3) });
-  const undated = todo({ id: "d" });
-  const starred = todo({ id: "e", starred: true });
-  const owned = todo({ id: "f", owner: "发言人 1" });
+  // Fixtures are built inside the frozen-clock beforeEach: relative offsets
+  // must be computed against the pinned Wednesday, not collection time.
+  let overdue: TodoItem;
+  let today: TodoItem;
+  let week: TodoItem;
+  let undated: TodoItem;
+  let starred: TodoItem;
+  let owned: TodoItem;
+
+  beforeEach(() => {
+    overdue = todo({ id: "a", dueDate: dateOnly(-1) });
+    today = todo({ id: "b", dueDate: dateOnly(0) });
+    week = todo({ id: "c", dueDate: dateOnly(3) });
+    undated = todo({ id: "d" });
+    starred = todo({ id: "e", starred: true });
+    owned = todo({ id: "f", owner: "发言人 1" });
+  });
 
   it("overdue keeps only open past-due todos", () => {
     const filter: SmartFilter = { kind: "overdue" };

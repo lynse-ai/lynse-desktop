@@ -28,6 +28,8 @@
 
 ### Improvements
 
+- Assistant renamed: the AI assistant is now "Lynse" (小灵同学 in Chinese) across menus, chat, and settings copy in every language.
+- CN edition language: the sign-in page now switches to Chinese automatically on the CN edition.
 - Live captions & streaming transcription: improved floating subtitle window presets and streaming text merging across DashScope and Volcengine protocols.
 - Edition & login polish: streamlined international-edition login options to Email, Google, and Apple; refined login layout, todo due-date reminders, and AI chat reasoning display.
 
@@ -42,6 +44,8 @@
 
 ### 改进
 
+- 助手更名：AI 助手更名为「小灵同学」（英文界面为 Lynse），菜单、聊天与设置文案全语言同步更新。
+- 国内版语言优化：简体中文版登录页自动切换为中文显示。
 - 实时字幕与流式转录优化：优化实时字幕浮窗预设与流式文本合并效果，完善 DashScope 与火山引擎协议字幕处理。
 - 登录与体验细节优化：国际站仅保留邮箱、Google 和 Apple 登录，优化登录页布局、待办到期提醒与 AI 助手思考过程展示。
 

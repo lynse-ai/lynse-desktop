@@ -176,8 +176,8 @@ describe("concurrent chat conversations", () => {
   });
 
   it.each([
-    ["zh-Hans", "小灵助手已完成回复"],
-    ["en", "Lina Assistant has finished replying."],
+    ["zh-Hans", "小灵同学已完成回复"],
+    ["en", "Lynse has finished replying."],
   ])("marks background replies unread and shows a localized toast in %s", async (language, completionMessage) => {
     const { default: i18next } = await import("i18next");
     const { RESOURCES } = await import("../../locales");

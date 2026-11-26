@@ -19,6 +19,36 @@
 > advertised it (its manifest mirror failed and the rollout was cancelled), so
 > that work plus the todo card redesign shipped together as 1.2.7.
 
+## 1.2.18 (2026-11-26)
+
+### New Features
+
+- Native Google sign-in for desktop: supports RFC 8252 loopback OAuth in the system browser (with embedded relay fallback), streamlining international-edition sign-in and account binding.
+- Dedicated SSO consent page (`/app/login/sso`) with OIDC scope support, separating browser SSO login from MCP client authorizations.
+
+### Improvements
+
+- Live captions & streaming transcription: improved floating subtitle window presets and streaming text merging across DashScope and Volcengine protocols.
+- Edition & login polish: streamlined international-edition login options to Email, Google, and Apple; refined login layout, todo due-date reminders, and AI chat reasoning display.
+
+### Fixed
+
+- Windows recording card reliability: fixed USB ownership verification, passcode synchronization, USB handshake stability, and USB configuration activation crashes, with clearer driver error guidance.
+
+### 新功能
+
+- 桌面端原生 Google 登录：支持通过系统浏览器完成 RFC 8252 回环 OAuth 登录（并保留内嵌中继页回退），优化国际站登录与账号绑定体验。
+- 新增专属 SSO 登录授权页（`/app/login/sso`）并支持 OIDC scopes，与 MCP 客户端授权完全分离。
+
+### 改进
+
+- 实时字幕与流式转录优化：优化实时字幕浮窗预设与流式文本合并效果，完善 DashScope 与火山引擎协议字幕处理。
+- 登录与体验细节优化：国际站仅保留邮箱、Google 和 Apple 登录，优化登录页布局、待办到期提醒与 AI 助手思考过程展示。
+
+### 错误修复
+
+- 修复 Windows 录音卡连接与同步问题：解决归属验证失败、口令同步、USB 握手及 USB 配置激活崩溃问题，并完善驱动错误提示。
+
 ## 1.2.17 (2026-11-24)
 
 ### Improvements

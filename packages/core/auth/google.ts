@@ -72,6 +72,11 @@ export function loginByGoogleIdentityToken(identityToken: string): Promise<Third
 function needBind(vo: ThirdPartyLoginVo): boolean {
   // The backend marks a first-time Google identity with isNeedBind; some
   // environments only return isFirstLogin + no token. Treat both as bind.
+  return isGoogleBindRequired(vo);
+}
+
+/** Bind-required marker shared by the popup and the desktop relay flows. */
+export function isGoogleBindRequired(vo: ThirdPartyLoginVo): boolean {
   return vo.isNeedBind === true || vo.needBind === true ||
     (vo.isFirstLogin === true && !vo.token);
 }
@@ -95,7 +100,8 @@ export function warmUpGoogleAuth(): Promise<void> {
     });
 }
 
-function errCode(e: unknown): string | null {
+/** Firebase error code (e.g. `auth/popup-blocked`), null for other shapes. */
+export function errCode(e: unknown): string | null {
   return e && typeof e === "object" && "code" in e ? String((e as { code: unknown }).code) : null;
 }
 
@@ -130,6 +136,123 @@ export async function signInWithGoogle(): Promise<GoogleLoginResult | GoogleBind
     }
     throw e;
   }
+}
+
+// ── Desktop: standalone auth-window relay flow ──────────────────────────────
+//
+// Google refuses OAuth in embedded WebViews, so the desktop cannot run the
+// popup above. Instead the desktop opens its standalone auth window on the
+// web app's relay page (`/auth/google-desktop?nonce=…`), which runs the
+// Firebase REDIRECT round trip inside that window and hands the resulting ID
+// token back by navigating to a done-marker URL the window intercepts
+// (`/auth/google-desktop/done#identityToken=…&nonce=…`). The web app serves
+// the relay page from the same origin pair as the Apple flow
+// (`webOriginForApi`), so the contract stays web-origin driven.
+
+/** Relay page path on the web app (the auth window's initial URL). */
+export const GOOGLE_RELAY_PATH = "/auth/google-desktop";
+/** Done-marker path the auth window intercepts (never actually loads). */
+export const GOOGLE_RELAY_DONE_PATH = "/auth/google-desktop/done";
+/**
+ * Both production web deployments (www.lynse.cn / www.lynse.ai) serve the app
+ * under the `/app` basePath — the auth window must open the relay page (and
+ * the relay page must aim its done marker) through that prefix or nginx 404s
+ * the request. Local dev servers mount at the root, where the prefix is
+ * simply absent.
+ */
+export const WEB_DEPLOY_BASE_PATH = "/app";
+
+/**
+ * The web origin serving the desktop relay flows, derived from the API host
+ * (production CN api.lynse.cn → www.lynse.cn; intl api-en.lynse.ai and the
+ * test gateway gapp.lynse.cn → www.lynse.ai; anything else — dev/staging —
+ * falls back to the CN site).
+ */
+export function webOriginForApi(apiBaseUrl: string): string {
+  try {
+    const host = new URL(apiBaseUrl).hostname;
+    if (host === "api-en.lynse.ai" || host === "gapp.lynse.cn") return "https://www.lynse.ai";
+  } catch {
+    // Malformed base URL: fall through to the CN site.
+  }
+  return "https://www.lynse.cn";
+}
+
+/** One-time nonce binding the relay landing to a specific sign-in attempt. */
+export function newGoogleRelayNonce(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/**
+ * The auth window's initial URL: the relay page carrying this attempt's nonce,
+ * behind the production web deployments' `/app` basePath (nginx proxies only
+ * that prefix).
+ */
+export function buildGoogleRelayUrl(webOrigin: string, nonce: string): string {
+  const url = new URL(`${webOrigin}${WEB_DEPLOY_BASE_PATH}${GOOGLE_RELAY_PATH}`);
+  url.searchParams.set("nonce", nonce);
+  return url.href;
+}
+
+/** One outcome parsed from an intercepted done-marker URL. */
+export type GoogleRelayLanding =
+  | { kind: "identity"; identityToken: string; nonce: string }
+  | { kind: "error"; error: string; nonce: string };
+
+/**
+ * Parse an intercepted done-marker URL. Null unless it carries the expected
+ * nonce and one of the outcome markers — a replayed or forged landing cannot
+ * complete a sign-in it was not minted for.
+ */
+export function googleRelayLandingFromUrl(
+  url: string,
+  expectedNonce: string,
+): GoogleRelayLanding | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  const params = new URLSearchParams(parsed.hash ? parsed.hash.slice(1) : "");
+  const query = parsed.searchParams;
+  const nonce = params.get("nonce") ?? query.get("nonce") ?? "";
+  if (!nonce || nonce !== expectedNonce) return null;
+  const identityToken = params.get("identityToken");
+  if (identityToken) return { kind: "identity", identityToken, nonce };
+  const error = query.get("error");
+  if (error) return { kind: "error", error, nonce };
+  return null;
+}
+
+/**
+ * Relay page, step 1: send the auth window through Google's consent page via
+ * the Firebase redirect flow (popups stay blocked in WebViews). The nonce
+ * does not participate in the Firebase round trip — the caller persists it
+ * and echoes it back on the done marker.
+ */
+export async function startGoogleBrowserRedirect(): Promise<void> {
+  if (!firebase) await warmUpGoogleAuth();
+  if (!firebase) throw new Error("Google sign-in unavailable");
+  await firebase.sdk.signInWithRedirect(firebase.auth, new firebase.sdk.GoogleAuthProvider());
+}
+
+/**
+ * Relay page, step 2: finish the redirect round trip and yield the Firebase
+ * ID token for the done marker (the DESKTOP exchanges it against
+ * /api/auth/login — the web page never creates a session of its own).
+ * Null when no redirect is pending (fresh page load before the round trip).
+ */
+export async function completeGoogleBrowserRedirect(): Promise<string | null> {
+  if (!firebase) await warmUpGoogleAuth();
+  if (!firebase) return null;
+  const result = await firebase.sdk.getRedirectResult(firebase.auth);
+  if (!result?.user) return null;
+  return result.user.getIdToken();
 }
 
 /**

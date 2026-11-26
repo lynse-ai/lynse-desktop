@@ -39,6 +39,7 @@
     "./api/memory": "./api/memory.ts",
     "./auth/email": "./auth/email.ts",
     "./auth/google": "./auth/google.ts",
+    "./auth/google-native": "./auth/google-native.ts",
     "./auth/apple": "./auth/apple.ts",
     "./analytics": "./analytics/index.ts",
     "./telemetry": "./telemetry/index.ts"

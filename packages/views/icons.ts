@@ -121,7 +121,8 @@ export {
   Clock,            // Time-based sort
   MessageCircle,    // Feedback
   MessageCircleQuestion, // Follow-up question chips (chat)
-  Bell,             // Update reminder
+  Bell,             // Update reminder / due reminder (on)
+  BellOff,          // Due reminder (off)
   LockKeyhole,
   LockKeyholeOpen,
   Paperclip,

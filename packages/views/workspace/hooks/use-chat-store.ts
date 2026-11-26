@@ -510,7 +510,10 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
           }));
           if (get().chatVisible === 0) {
             const doneProvider = get().conversations.find((c) => c.id === conversationId)?.provider;
-            toast.success(doneProvider === "workbuddy" ? "Work buddy 已完成回复" : "小灵助手已完成回复");
+            const assistant = doneProvider === "workbuddy"
+              ? i18next.t("chat.assistant_workbuddy")
+              : i18next.t("chat.assistant_lynse");
+            toast.success(i18next.t("chat.reply_completed", { assistant }));
           }
           // Mirror into the unified notification center (drives the Bell badge).
           const convTitle = (get().conversations.find((c) => c.id === conversationId)?.title ?? "").trim();
@@ -628,7 +631,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
     // before creating a new conversation so a rejected send leaves no empty
     // conversation behind.
     if (runs.size >= MAX_CONCURRENT_CHATS) {
-      toast.error(`最多同时进行 ${MAX_CONCURRENT_CHATS} 个对话，请稍候`);
+      toast.error(i18next.t("chat.too_many_conversations", { count: MAX_CONCURRENT_CHATS }));
       return;
     }
 

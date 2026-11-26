@@ -38,7 +38,7 @@ export function AgreementCheckbox({
         )}
       </button>
       <p className={cn(
-        "text-2xs leading-relaxed text-muted-foreground text-pretty",
+        "text-2xs leading-relaxed text-muted-foreground",
         web ? "text-center" : "text-left",
       )}>
         {t("auth.agree_prefix")}

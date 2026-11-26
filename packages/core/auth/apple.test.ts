@@ -9,6 +9,9 @@ describe("appleWebLandingOrigin", () => {
   it("pairs the API host with its site origin", () => {
     expect(appleWebLandingOrigin("https://api.lynse.cn")).toBe("https://www.lynse.cn");
     expect(appleWebLandingOrigin("https://gapp.lynse.cn")).toBe("https://www.lynse.ai");
+    // The intl production gateway rides the intl site (its backend 302s the
+    // Apple landing there).
+    expect(appleWebLandingOrigin("https://api-en.lynse.ai")).toBe("https://www.lynse.ai");
     // Dev/staging APIs fall back to the CN site.
     expect(appleWebLandingOrigin("https://api-staging.example.test")).toBe("https://www.lynse.cn");
   });

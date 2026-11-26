@@ -1,4 +1,5 @@
 import { api } from "../api/client";
+import { webOriginForApi } from "./google";
 import type { AuthSession } from "./session";
 import type { SmsCaptchaResult } from "./sms";
 import type { WechatLoginVo } from "./wechat";
@@ -80,17 +81,13 @@ export function sessionFromAppleFragment(token: string): AuthSession {
 /**
  * Web origin the backend 302s its APPLE flow to, derived from the API host
  * (the same site pairing the rest of the desktop uses: production CN
- * api.lynse.cn → www.lynse.cn, gapp.lynse.cn → www.lynse.ai; anything else —
- * dev/staging APIs included — falls back to the CN site). The desktop auth
- * window matches its landing interception against this origin.
+ * api.lynse.cn → www.lynse.cn, intl api-en.lynse.ai and the test gateway
+ * gapp.lynse.cn → www.lynse.ai; anything else — dev/staging APIs included —
+ * falls back to the CN site). The desktop auth window matches its landing
+ * interception against this origin.
  */
 export function appleWebLandingOrigin(apiBaseUrl: string): string {
-  try {
-    if (new URL(apiBaseUrl).hostname === "gapp.lynse.cn") return "https://www.lynse.ai";
-  } catch {
-    // Malformed base URL: fall through to the CN site.
-  }
-  return "https://www.lynse.cn";
+  return webOriginForApi(apiBaseUrl);
 }
 
 /** One outcome relayed from an intercepted Apple landing URL. */

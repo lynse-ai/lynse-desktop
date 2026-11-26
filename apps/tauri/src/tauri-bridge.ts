@@ -258,6 +258,33 @@ export type DesktopApi = {
         callback: (callbackUrl: string) => void,
       ) => Promise<() => void>;
     };
+    // Google sign-in window: the web app's /auth/google-desktop relay page
+    // runs the Firebase redirect round trip inside the standalone window;
+    // the done-marker navigation (identityToken fragment + nonce) is
+    // relayed back as a URL event.
+    google: {
+      openAuthWindow: (url: string, landingOrigin: string, nonce: string) => Promise<void>;
+      closeAuthWindow: () => Promise<void>;
+      onAuthCallback: (
+        callback: (callbackUrl: string) => void,
+      ) => Promise<() => void>;
+    };
+    // Google native sign-in (RFC 8252): the system browser posts the
+    // authorization code to a one-shot loopback listener; both token
+    // exchanges (Google code → ID token, Google → Firebase ID token) run in
+    // Rust and yield only the tokens the renderer needs.
+    googleNative: {
+      openListener: () => Promise<number>;
+      stopListener: () => Promise<void>;
+      onCallback: (callback: (callbackUrl: string) => void) => Promise<() => void>;
+      exchangeCode: (
+        code: string,
+        verifier: string,
+        redirectUri: string,
+        clientId: string,
+      ) => Promise<{ id_token: string }>;
+      firebaseSignIn: (googleIdToken: string, apiKey: string) => Promise<{ id_token: string }>;
+    };
   };
 }
 
@@ -928,6 +955,51 @@ export async function installTauriBridge(windowKind: string | null = null): Prom
         getCurrentWebview().listen<string>("apple-auth-callback", (event) =>
           callback(event.payload),
         ),
+    },
+    // Google sign-in window: the web app's /auth/google-desktop relay page
+    // runs the Firebase redirect round trip inside the standalone window and
+    // navigates to the done marker (identityToken fragment + nonce); the
+    // marker navigation is relayed back as a URL event before it loads.
+    google: {
+      openAuthWindow: (url: string, landingOrigin: string, nonce: string) =>
+        command<void>("google_auth_window", { url, landingOrigin, nonce }),
+      closeAuthWindow: () => command<void>("google_auth_window_close"),
+      onAuthCallback: (callback: (callbackUrl: string) => void) =>
+        getCurrentWebview().listen<string>("google-auth-callback", (event) =>
+          callback(event.payload),
+        ),
+    },
+    // Google native sign-in (RFC 8252): a one-shot loopback listener catches
+    // the system browser's code redirect; both token exchanges run in Rust
+    // (outside the WebView's CORS regime) and yield only the needed tokens.
+    googleNative: {
+      openListener: () => command<number>("google_oauth_start"),
+      stopListener: () => command<void>("google_oauth_stop"),
+      onCallback: (callback: (callbackUrl: string) => void) =>
+        getCurrentWebview().listen<string>("google-oauth-callback", (event) =>
+          callback(event.payload),
+        ),
+      exchangeCode: (
+        code: string,
+        verifier: string,
+        redirectUri: string,
+        clientId: string,
+        clientSecret?: string,
+      ) =>
+        command<{ id_token: string }>("google_oauth_exchange", {
+          input: {
+            code,
+            verifier,
+            redirect_uri: redirectUri,
+            client_id: clientId,
+            ...(clientSecret ? { client_secret: clientSecret } : {}),
+          },
+        }),
+      firebaseSignIn: (googleIdToken: string, apiKey: string) =>
+        command<{ id_token: string }>("google_oauth_firebase_signin", {
+          googleIdToken,
+          apiKey,
+        }),
     },
   },
     attachment: {

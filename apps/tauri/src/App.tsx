@@ -1,6 +1,7 @@
 import { lazy, Suspense } from "react";
 import { CoreProvider } from "@lynse/core/platform";
 import { configureLynseSso } from "@lynse/core/auth/lynse-sso";
+import { configureGoogleNativeLogin } from "@lynse/core/auth/google-native";
 import { ThemeProvider } from "@lynse/ui/components/common/theme-provider";
 import { Toaster } from "@lynse/ui/components/ui/sonner";
 import { AuthGate } from "@lynse/views/auth/auth-gate";
@@ -37,6 +38,20 @@ configureLynseSso(
         redirectUri:
           import.meta.env.VITE_LYNSE_SSO_REDIRECT_URI ||
           `${import.meta.env.VITE_LYNSE_SSO_URL}/oauth/desktop-callback`,
+      }
+    : null,
+);
+
+// Google native sign-in for the desktop (RFC 8252 loopback): both values are
+// PUBLIC config — a "Desktop app" OAuth client id (PKCE only, no secret) and
+// the Firebase Web API key for accounts:signInWithIdp. Unset → the login
+// page falls back to the embedded auth-window relay flow.
+configureGoogleNativeLogin(
+  import.meta.env.VITE_GOOGLE_DESKTOP_CLIENT_ID && import.meta.env.VITE_FIREBASE_WEB_API_KEY
+    ? {
+        clientId: import.meta.env.VITE_GOOGLE_DESKTOP_CLIENT_ID,
+        clientSecret: import.meta.env.VITE_GOOGLE_DESKTOP_CLIENT_SECRET || undefined,
+        firebaseApiKey: import.meta.env.VITE_FIREBASE_WEB_API_KEY,
       }
     : null,
 );

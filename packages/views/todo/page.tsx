@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useMemo, useEffect } from "react";
-import { Plus, Calendar, Trash2, X, RefreshCw, Loader2, List, User, Columns2, Search, Bell, CheckCircle2 } from "../icons";
+import { Plus, Calendar, Trash2, X, RefreshCw, Loader2, List, User, Columns2, Search, Bell, BellOff, CheckCircle2 } from "../icons";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { SqueezePanel } from "../squeeze-panel";
 import { Button } from "@lynse/ui/components/ui/button";
@@ -646,7 +646,7 @@ export function TodoPage() {
   // smart lists; chips row sits between the add bar and the views.
   const [filter, setFilter] = useState<SmartFilter>(DEFAULT_FILTER);
   const [query, setQuery] = useState("");
-  // Due-reminder bell; the watcher (dashboard layout) reads the same flag.
+  // Due-reminder bell switch; the watcher (dashboard layout) reads the same flag.
   const [remindersOn, setRemindersOn] = useState(() => todoRemindersEnabled());
   // Export now lives in the card context menu: pick a cloud todo, right-click,
   // 导出 — the dialog opens for that single item. The menu component hides the
@@ -666,7 +666,7 @@ export function TodoPage() {
     [addLocal],
   );
 
-  /** Bell toggle: flips the persisted flag and, when enabling on desktop,
+  /** Bell switch: flips the persisted flag and, when enabling on desktop,
    *  raises the OS prompt (reminders surface through the OS notification
    *  center; the in-app toast is only the fallback while ungranted). */
   const handleToggleReminders = useCallback(async () => {
@@ -772,6 +772,8 @@ export function TodoPage() {
     [handleToggle, handleDelete, handleMoveKanban, navigate],
   );
 
+  const reminderLabel = remindersOn ? t("todo.reminder_toggle_on") : t("todo.reminder_toggle_off");
+
   // ── Render ────────────────────────────────────────────────
   return (
     // Web caps the page on narrow viewports so the edit panel squeezes a
@@ -783,19 +785,24 @@ export function TodoPage() {
       <TitleBarSlot
         actions={
           <>
-            {/* Due-reminder bell — flips the persisted flag the dashboard
-                watcher reads; enabling raises the OS prompt on desktop. */}
+            {/* Due-reminder bell switch — Bell (on) / BellOff (off) with
+                pressed pill styling and a hairline divider before the view
+                switcher so it clearly reads as a toggle. */}
             <button
+              type="button"
               onClick={() => void handleToggleReminders()}
-              className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs hover:bg-accent/50 ${
-                remindersOn ? "text-foreground" : "text-muted-foreground/60"
+              className={`inline-flex size-[26px] items-center justify-center rounded-md border transition-colors ${
+                remindersOn
+                  ? "border-border/60 bg-background text-foreground shadow-2xs hover:bg-accent/50"
+                  : "border-transparent text-muted-foreground/60 hover:bg-accent/50 hover:text-foreground"
               }`}
-              title={t("todo.reminder_toggle")}
+              title={reminderLabel}
+              aria-label={reminderLabel}
               aria-pressed={remindersOn}
             >
-              <Bell className={`size-3.5 ${remindersOn ? "" : "opacity-50"}`} />
-              {t("todo.reminder_toggle")}
+              {remindersOn ? <Bell className="size-3.5" /> : <BellOff className="size-3.5" />}
             </button>
+            <div className="mx-1 h-[18px] w-px shrink-0 bg-border/60" aria-hidden="true" />
             {/* View switcher — list / kanban / calendar as a compact
                 segmented control. */}
             <div className="flex items-center gap-0.5 rounded-md border border-border/50 bg-muted/30 p-0.5">

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { cn } from "@lynse/ui/lib/utils";
+import { useTranslation } from "@lynse/core/i18n/react";
 import type { LoginCarouselSlide } from "./login-carousel-artwork";
 
 /** Crossfade dwell time per slide. */
@@ -19,6 +20,7 @@ const SLIDE_FADE_MS = 700;
  */
 export function LoginCarousel({ slides }: { slides: LoginCarouselSlide[] }) {
   const [active, setActive] = useState(0);
+  const { t } = useTranslation();
 
   useEffect(() => {
     if (slides.length < 2) return;
@@ -50,10 +52,10 @@ export function LoginCarousel({ slides }: { slides: LoginCarouselSlide[] }) {
               className="w-full select-none rounded-2xl object-cover shadow-sm ring-1 ring-black/5"
             />
             <h2 className="mt-9 text-center text-xl font-semibold tracking-tight">
-              {slide.title}
+              {t(`auth.login_carousel_${i + 1}_title`, { defaultValue: slide.title })}
             </h2>
             <p className="mt-3 max-w-md text-center text-sm leading-relaxed text-muted-foreground">
-              {slide.description}
+              {t(`auth.login_carousel_${i + 1}_description`, { defaultValue: slide.description })}
             </p>
           </div>
         ))}

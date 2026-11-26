@@ -91,6 +91,10 @@ mod wechat_auth;
 mod oauth_auth;
 // Apple sign-in window (backend-mediated form-post contract, landing 302).
 mod apple_auth;
+// Google sign-in window (Firebase-redirect relay page, done-marker landing).
+mod google_auth;
+// Google native sign-in (RFC 8252 loopback listener + PKCE/Firebase relays).
+mod google_oauth;
 // Problem report: main-window screenshot capture + CNB issue submission.
 mod report_screenshot;
 mod cnb_report;
@@ -5629,6 +5633,9 @@ pub fn run() {
             wechat_auth::wechat_auth_window, wechat_auth::wechat_auth_window_close,
             oauth_auth::oauth_auth_window, oauth_auth::oauth_auth_window_close,
             apple_auth::apple_auth_window, apple_auth::apple_auth_window_close,
+            google_auth::google_auth_window, google_auth::google_auth_window_close,
+            google_oauth::google_oauth_start, google_oauth::google_oauth_stop,
+            google_oauth::google_oauth_exchange, google_oauth::google_oauth_firebase_signin,
             diagnostics_read_logs, diagnostics_prepare_report, attachment_save,
             attachment_text, share_file,
             live_translation::live_translation_permissions,

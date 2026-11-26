@@ -334,6 +334,48 @@ describe("desktop Apple sign-in", () => {
     expect(closeAuthWindow).toHaveBeenCalled();
   });
 
+  it("replaces desktop intl OAuth buttons with the waiting notice in-place so bottom text stays visible", async () => {
+    localStorage.setItem("lynse_edition", "intl");
+    const googleOpen = vi.fn(async () => {});
+    const googleClose = vi.fn(async () => {});
+    vi.mocked(getDesktopAppApi).mockReturnValue({
+      google: {
+        openAuthWindow: googleOpen,
+        closeAuthWindow: googleClose,
+        onAuthCallback: vi.fn(async () => unlisten),
+      },
+      apple: {
+        openAuthWindow,
+        closeAuthWindow,
+        onAuthCallback: vi.fn(async () => unlisten),
+      },
+    } as unknown as ReturnType<typeof getDesktopAppApi>);
+
+    try {
+      render(<LoginPage />);
+      const googleBtn = screen.getByTestId("google-login");
+      const siteSwitcher = screen.getByLabelText("auth.server_region");
+      fireEvent.click(googleBtn);
+
+      await waitFor(() => expect(googleOpen).toHaveBeenCalledTimes(1));
+      const waiting = screen.getByTestId("oauth-waiting");
+      expect(screen.getByText("auth.google_waiting")).toBeTruthy();
+      expect(screen.getByText("auth.sso_waiting_hint")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "auth.wechat_cancel" })).toBeTruthy();
+      expect(screen.getAllByTestId("oauth-waiting")).toHaveLength(1);
+      // Waiting notice replaces the OAuth buttons above the site switcher instead of pushing past it.
+      expect(screen.queryByTestId("google-login")).toBeNull();
+      expect(waiting.compareDocumentPosition(siteSwitcher)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+
+      fireEvent.click(screen.getByRole("button", { name: "auth.wechat_cancel" }));
+      expect(googleClose).toHaveBeenCalledTimes(1);
+      expect(screen.queryByTestId("oauth-waiting")).toBeNull();
+      expect(screen.getByTestId("google-login")).toBeTruthy();
+    } finally {
+      localStorage.removeItem("lynse_edition");
+    }
+  });
+
   it("renders server region switcher and allows switching between CN and Global editions", async () => {
     localStorage.clear();
     render(<LoginPage />);

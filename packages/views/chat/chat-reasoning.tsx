@@ -45,14 +45,15 @@ export type ToolKind =
  * Keyword rules over the raw backend tool name; anything else is "execute".
  * stop/task sit above read so `stop_task` and `get_task_output` classify by
  * their intent instead of falling into the `get_`/`_task` substrings.
+ * Match `kill` as a token so `skill` does not look like a stop command.
  */
 const TOOL_KIND_RULES: Array<[RegExp, ToolKind]> = [
   [/mcp/i, "mcp"],
-  [/stop|cancel|abort|kill|terminate|停止|取消|终止/i, "stop"],
+  [/stop|cancel|abort|(?:^|[^a-z0-9])kill(?:[^a-z0-9]|$)|terminate|停止|取消|终止/i, "stop"],
   [/task|job|output|poll|log|任务|输出|日志|后台/i, "task"],
   [/think|reason|思考/i, "think"],
   [/search|query|find|list|检索|查询|搜索/i, "search"],
-  [/read|fetch|get_|view|读取|查看/i, "read"],
+  [/read|fetch|get_|^load_|view|读取|查看/i, "read"],
   [/edit|write|create|patch|update|save|编辑|修改|保存|新建/i, "edit"],
   [/terminal|bash|shell|command|终端|命令/i, "terminal"],
 ];
@@ -76,18 +77,6 @@ const KIND_ICON: Record<ToolKind, React.ComponentType<{ className?: string }>> =
   execute: Wrench,
 };
 
-const KIND_STYLE: Record<ToolKind, { bg: string; text: string; border: string }> = {
-  think: { bg: "bg-indigo-500/10", text: "text-indigo-600 dark:text-indigo-400", border: "border-indigo-500/20" },
-  search: { bg: "bg-sky-500/10", text: "text-sky-600 dark:text-sky-400", border: "border-sky-500/20" },
-  read: { bg: "bg-amber-500/10", text: "text-amber-600 dark:text-amber-400", border: "border-amber-500/20" },
-  edit: { bg: "bg-emerald-500/10", text: "text-emerald-600 dark:text-emerald-400", border: "border-emerald-500/20" },
-  terminal: { bg: "bg-purple-500/10", text: "text-purple-600 dark:text-purple-400", border: "border-purple-500/20" },
-  task: { bg: "bg-blue-500/10", text: "text-blue-600 dark:text-blue-400", border: "border-blue-500/20" },
-  stop: { bg: "bg-rose-500/10", text: "text-rose-600 dark:text-rose-400", border: "border-rose-500/20" },
-  mcp: { bg: "bg-fuchsia-500/10", text: "text-fuchsia-600 dark:text-fuchsia-400", border: "border-fuchsia-500/20" },
-  execute: { bg: "bg-muted/80", text: "text-muted-foreground", border: "border-border/60" },
-};
-
 /** Compact running/done chip rows for every tool call in the current turn. */
 export function ToolActivity({ tools }: { tools: ChatToolUse[] }) {
   return (
@@ -104,7 +93,6 @@ function ToolChip({ tool }: { tool: ChatToolUse }) {
   const { t } = useTranslation();
   const kind = toolKind(tool.name);
   const Icon = KIND_ICON[kind];
-  const style = KIND_STYLE[kind];
   const running = tool.state === "running";
   const elapsed = useElapsedSeconds(tool.startedAt, running);
   return (
@@ -112,18 +100,18 @@ function ToolChip({ tool }: { tool: ChatToolUse }) {
       className="group flex items-center gap-2 py-0.5 px-0.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
       aria-label={t("chat.tool_activity", { tool: tool.name })}
     >
-      <Icon className={cn("size-3.5 shrink-0", style.text)} />
+      <Icon className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="shrink-0 font-medium text-foreground/85">{t(`chat.tool_${kind}`)}</span>
       <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-muted-foreground/75">{tool.name}</span>
       {running ? (
-        <span className="flex shrink-0 items-center gap-1.5 tabular-nums text-primary/90 text-2xs">
+        <span className="flex shrink-0 items-center gap-1.5 tabular-nums text-muted-foreground text-2xs">
           {elapsed != null && <span>{t("chat.elapsed_seconds", { seconds: elapsed })}</span>}
-          <StatusGlyph activity="running" className="size-3 text-primary" />
+          <StatusGlyph activity="running" className="size-3" />
         </span>
       ) : tool.state === "error" ? (
         <AlertCircle className="size-3.5 shrink-0 text-destructive" aria-label={t("chat.tool_failed")} />
       ) : (
-        <Check className="size-3.5 shrink-0 text-success" />
+        <Check className="size-3.5 shrink-0 text-muted-foreground" />
       )}
     </div>
   );
@@ -225,9 +213,9 @@ export function ThinkingBlock({
                 ? t("chat.thinking_elapsed_done", { seconds: frozenSeconds })
                 : t("chat.thought_process")
           }
-          className="inline-flex items-center gap-1.5 text-left text-xs text-muted-foreground/80 hover:text-foreground transition-colors group cursor-pointer"
+          className="inline-flex items-center gap-1.5 text-left text-xs text-muted-foreground/80 hover:text-foreground transition-colors cursor-pointer"
         >
-          <Sparkles className={cn("size-3.5 shrink-0 text-muted-foreground/70 group-hover:text-primary transition-colors", active && "text-primary animate-pulse")} />
+          <Sparkles className={cn("size-3.5 shrink-0", active && "animate-pulse")} />
           {active ? (
             <div className="flex items-center gap-1.5 font-medium text-foreground/90">
               <ActivityLabel text={t("chat.thinking_active")} />
@@ -254,7 +242,7 @@ export function ThinkingBlock({
               title={copied ? t("chat.copied") : t("chat.copy_thought")}
               aria-label={copied ? t("chat.copied") : t("chat.copy_thought")}
             >
-              {copied ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
+              {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
               <span>{copied ? t("chat.copied") : t("chat.copy_thought")}</span>
             </button>
           )}

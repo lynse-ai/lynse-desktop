@@ -1346,7 +1346,7 @@ function AssistantMessage({
           {todoConvertBusy ? (
             <>
               <Loader2 className="size-3.5 animate-spin" />
-              <span className="text-2xs">{t("chat.converting")}</span>
+              <span className="text-2xs">{t("workspace.saving")}</span>
             </>
           ) : todoConverted ? (
             <>

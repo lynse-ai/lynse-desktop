@@ -21,10 +21,22 @@ import {
   sendEmailCaptcha,
 } from "@lynse/core/auth/email";
 import {
+  buildGoogleRelayUrl,
+  completeGoogleLogin,
   completeGoogleRedirect,
+  googleRelayLandingFromUrl,
+  isGoogleBindRequired,
   isGoogleConfigured,
+  loginByGoogleIdentityToken,
+  newGoogleRelayNonce,
   signInWithGoogle,
+  webOriginForApi,
 } from "@lynse/core/auth/google";
+import {
+  getGoogleNativeLoginConfig,
+  googleNativeCallbackFromUrl,
+  startGoogleNativeLogin,
+} from "@lynse/core/auth/google-native";
 import {
   appleLandingFromUrl,
   appleWebLandingOrigin,
@@ -102,7 +114,7 @@ type QrPhase = "creating" | "ready" | "scanned" | "expired" | "error";
  *  code, or the API form. */
 type LoginView = "phone" | "email" | "more" | "qr" | "api";
 
-const webProviderButtonClass = "flex h-9 w-full items-center justify-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70";
+const providerButtonClass = "flex h-9 w-full items-center justify-center gap-2.5 rounded-full border border-border/50 bg-muted/40 px-3.5 text-sm transition-colors hover:bg-muted/80 disabled:opacity-50";
 
 /**
  * Startup login page, shown by the AuthGate before any session exists, in
@@ -177,8 +189,25 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
     setQrPhase("creating");
     qrCancelledRef.current = true;
     wechatCancelledRef.current = true;
+    wechatAttemptRef.current += 1;
+    wechatActiveRef.current = false;
+    setWechatWaiting(false);
+    stopWechatListener();
     ssoCancelledRef.current = true;
+    ssoAttemptRef.current += 1;
+    ssoActiveRef.current = false;
+    setSsoWaiting(false);
+    stopSsoListener();
     appleCancelledRef.current = true;
+    appleAttemptRef.current += 1;
+    appleActiveRef.current = false;
+    setAppleWaiting(false);
+    stopAppleListener();
+    googleCancelledRef.current = true;
+    googleAttemptRef.current += 1;
+    googleActiveRef.current = false;
+    setGoogleWaiting(false);
+    stopGoogleListener();
   };
 
   // Create a challenge, show its QR, then
@@ -233,6 +262,25 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
   const appleActiveRef = useRef(false);
   const appleUnlistenRef = useRef<(() => void) | null>(null);
   const [appleWaiting, setAppleWaiting] = useState(false);
+  // Google sign-in (desktop intl) — standalone auth window running the web
+  // app's Firebase-redirect relay page; the done-marker navigation carries
+  // the identity token back. Same attempt-bound completion shape.
+  const googleCancelledRef = useRef(false);
+  const googleAttemptRef = useRef(0);
+  const googleActiveRef = useRef(false);
+  const googleUnlistenRef = useRef<(() => void) | null>(null);
+  const googleNonceRef = useRef("");
+  const [googleWaiting, setGoogleWaiting] = useState(false);
+  // Native loopback flow (RFC 8252): the system browser posts the code to a
+  // one-shot 127.0.0.1 listener; per-attempt PKCE/config ride this ref.
+  const googleNativeFlowRef = useRef<{
+    state: string;
+    verifier: string;
+    redirectUri: string;
+    clientId: string;
+    clientSecret?: string;
+    apiKey: string;
+  } | null>(null);
   // Bind-required login response — shows the phone + SMS form instead of
   // the sign-in views until the bind completes.
   // `?bind_preview=1` renders the dedicated binding screen directly (QA
@@ -302,6 +350,11 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
       appleAttemptRef.current += 1;
       appleUnlistenRef.current?.();
       appleUnlistenRef.current = null;
+      googleCancelledRef.current = true;
+      googleAttemptRef.current += 1;
+      googleUnlistenRef.current?.();
+      googleUnlistenRef.current = null;
+      void getDesktopAppApi()?.googleNative?.stopListener();
     };
   }, []);
 
@@ -594,6 +647,7 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
     wechatCancelledRef.current = false;
     setWechatWaiting(true);
     setError(null);
+    setSmsError(null);
     const desktopApi = getDesktopAppApi();
     try {
       const started = await startWechatLogin({ desktopQr: !!desktopApi?.wechat });
@@ -678,6 +732,7 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
     ssoCancelledRef.current = false;
     setSsoWaiting(true);
     setError(null);
+    setSmsError(null);
     try {
       const started = await startSsoLogin();
       if (attempt !== ssoAttemptRef.current) return;
@@ -759,6 +814,7 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
     appleCancelledRef.current = false;
     setAppleWaiting(true);
     setError(null);
+    setSmsError(null);
     const appleBridge = getDesktopAppApi()?.apple;
     if (!appleBridge) {
       appleActiveRef.current = false;
@@ -805,6 +861,207 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
     void getDesktopAppApi()?.apple?.closeAuthWindow();
   }
 
+  function stopGoogleListener() {
+    googleUnlistenRef.current?.();
+    googleUnlistenRef.current = null;
+  }
+
+  /** Shared tail of both desktop Google flows: exchange the Firebase ID
+   *  token for a session (or hand the identity to the bind form). */
+  async function completeGoogleIdentity(identityToken: string, attempt: number) {
+    const vo = await loginByGoogleIdentityToken(identityToken);
+    if (googleCancelledRef.current || attempt !== googleAttemptRef.current) return;
+    if (isGoogleBindRequired(vo)) {
+      setBindAuthType("GOOGLE");
+      setWechatBindVo({ thirdPartyId: vo.thirdPartyId ?? "" });
+      return;
+    }
+    completeLogin(await completeGoogleLogin(vo));
+  }
+
+  function resetGoogleFlow(attempt: number) {
+    if (attempt !== googleAttemptRef.current) return;
+    googleActiveRef.current = false;
+    setGoogleWaiting(false);
+    stopGoogleListener();
+  }
+
+  /** Desktop relay window landed on the done marker: the web app's relay
+   *  page carried the Firebase ID token (fragment) or an error key. The
+   *  identity exchange runs here — the browser never creates a session. */
+  async function finishGoogleRelayLogin(landingUrl: string, attempt: number) {
+    if (googleCancelledRef.current || attempt !== googleAttemptRef.current) return;
+    stopGoogleListener();
+    try {
+      const landing = googleRelayLandingFromUrl(landingUrl, googleNonceRef.current);
+      if (landing?.kind === "identity") {
+        await completeGoogleIdentity(landing.identityToken, attempt);
+      } else {
+        setError(t("auth.login_failed"));
+      }
+    } catch (e: unknown) {
+      console.error("[google-relay] sign-in failed:", e instanceof Error ? e.message : String(e));
+      if (!googleCancelledRef.current && attempt === googleAttemptRef.current) {
+        setError(authErrorText(e, t, "auth.login_failed"));
+      }
+    } finally {
+      resetGoogleFlow(attempt);
+      void getDesktopAppApi()?.google?.closeAuthWindow();
+    }
+  }
+
+  /**
+   * Google sign-in on the desktop (intl): Google refuses OAuth inside
+   * embedded WebViews, so the popup flow never runs here. Instead a
+   * standalone auth window loads the web app's /auth/google-desktop relay
+   * page (which runs the Firebase redirect round trip inside that window)
+   * and the done-marker navigation — identity token bound to this attempt's
+   * nonce — is intercepted and relayed back. The desktop bundle needs no
+   * Firebase config; the relay page serves it.
+   */
+  async function handleGoogleRelayLogin() {
+    if (googleActiveRef.current) return;
+    const googleBridge = getDesktopAppApi()?.google;
+    if (!googleBridge) return;
+    const attempt = ++googleAttemptRef.current;
+    googleActiveRef.current = true;
+    googleCancelledRef.current = false;
+    setGoogleWaiting(true);
+    setError(null);
+    setSmsError(null);
+    const nonce = newGoogleRelayNonce();
+    const origin = webOriginForApi(api().getBaseUrl());
+    try {
+      // Listen before opening: the window intercepts the done marker.
+      const unlisten = await googleBridge.onAuthCallback((landingUrl) => {
+        void finishGoogleRelayLogin(landingUrl, attempt);
+      });
+      if (attempt !== googleAttemptRef.current) {
+        unlisten();
+        return;
+      }
+      googleUnlistenRef.current = unlisten;
+      googleNonceRef.current = nonce;
+      await googleBridge.openAuthWindow(buildGoogleRelayUrl(origin, nonce), origin, nonce);
+    } catch (e: unknown) {
+      if (attempt === googleAttemptRef.current) {
+        googleActiveRef.current = false;
+        stopGoogleListener();
+        setGoogleWaiting(false);
+        setError(authErrorText(e, t, "auth.login_failed"));
+      }
+    }
+  }
+
+  function handleCancelGoogleLogin() {
+    googleCancelledRef.current = true;
+    googleAttemptRef.current += 1;
+    googleActiveRef.current = false;
+    setGoogleWaiting(false);
+    stopGoogleListener();
+    void getDesktopAppApi()?.google?.closeAuthWindow();
+    void getDesktopAppApi()?.googleNative?.stopListener();
+    googleNativeFlowRef.current = null;
+  }
+
+  /**
+   * Google sign-in on the desktop — native installed-app flow (RFC 8252),
+   * the preferred path when the desktop OAuth client is configured: the
+   * SYSTEM browser runs the consent page (Google never blocks real browsers)
+   * and posts the authorization code back to a one-shot 127.0.0.1 listener.
+   * Both token exchanges (Google code → ID token, Google → Firebase ID
+   * token) run in the Rust layer; the identity lands in the same
+   * /api/auth/login exchange as the web popup flow.
+   */
+  async function handleGoogleNativeLogin() {
+    const bridge = getDesktopAppApi()?.googleNative;
+    const config = getGoogleNativeLoginConfig();
+    if (!bridge || !config || googleActiveRef.current) return;
+    const attempt = ++googleAttemptRef.current;
+    googleActiveRef.current = true;
+    googleCancelledRef.current = false;
+    setGoogleWaiting(true);
+    setError(null);
+    setSmsError(null);
+    try {
+      const port = await bridge.openListener();
+      if (attempt !== googleAttemptRef.current) return;
+      const { authorizeUrl, redirectUri, state, verifier } = await startGoogleNativeLogin(port);
+      if (attempt !== googleAttemptRef.current) {
+        void bridge.stopListener();
+        return;
+      }
+      // Listen before opening: the browser's redirect must not race the
+      // listener registration.
+      const unlisten = await bridge.onCallback((callbackUrl) => {
+        void finishGoogleNativeLogin(callbackUrl, attempt);
+      });
+      if (attempt !== googleAttemptRef.current) {
+        unlisten();
+        void bridge.stopListener();
+        return;
+      }
+      googleUnlistenRef.current = unlisten;
+      googleNativeFlowRef.current = {
+        state,
+        verifier,
+        redirectUri,
+        clientId: config.clientId,
+        clientSecret: config.clientSecret,
+        apiKey: config.firebaseApiKey,
+      };
+      openExternalUrl(authorizeUrl);
+    } catch (e: unknown) {
+      if (attempt === googleAttemptRef.current) {
+        void bridge.stopListener();
+        googleNativeFlowRef.current = null;
+        googleActiveRef.current = false;
+        stopGoogleListener();
+        setGoogleWaiting(false);
+        setError(authErrorText(e, t, "auth.login_failed"));
+      }
+    }
+  }
+
+  /** Loopback redirect landed: Google posted the code (or an error) bound to
+   *  this attempt's state; the rest happens in the Rust relays. */
+  async function finishGoogleNativeLogin(callbackUrl: string, attempt: number) {
+    const flow = googleNativeFlowRef.current;
+    if (!flow || googleCancelledRef.current || attempt !== googleAttemptRef.current) return;
+    const callback = googleNativeCallbackFromUrl(callbackUrl, flow.state);
+    // Not this attempt's redirect (stale event, favicon noise) — keep waiting.
+    if (!callback) return;
+    stopGoogleListener();
+    void getDesktopAppApi()?.googleNative?.stopListener();
+    googleNativeFlowRef.current = null;
+    try {
+      if (callback.kind === "error") {
+        setError(t("auth.login_failed"));
+        return;
+      }
+      const bridge = getDesktopAppApi()?.googleNative;
+      if (!bridge) throw new Error("Google desktop bridge missing");
+      const google = await bridge.exchangeCode(
+        callback.code,
+        flow.verifier,
+        flow.redirectUri,
+        flow.clientId,
+        flow.clientSecret,
+      );
+      if (googleCancelledRef.current || attempt !== googleAttemptRef.current) return;
+      const firebase = await bridge.firebaseSignIn(google.id_token, flow.apiKey);
+      if (googleCancelledRef.current || attempt !== googleAttemptRef.current) return;
+      await completeGoogleIdentity(firebase.id_token, attempt);
+    } catch (e: unknown) {
+      console.error("[google-native] sign-in failed:", e instanceof Error ? e.message : String(e));
+      if (!googleCancelledRef.current && attempt === googleAttemptRef.current) {
+        setError(authErrorText(e, t, "auth.login_failed"));
+      }
+    } finally {
+      resetGoogleFlow(attempt);
+    }
+  }
+
   const qrHint =
     qrPhase === "scanned"
       ? t("auth.qr_scanned")
@@ -848,6 +1105,52 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
     );
   }
 
+  const waitingState = wechatWaiting
+    ? {
+        title: t("auth.wechat_waiting_scan"),
+        hint: t("auth.wechat_waiting_hint"),
+        onCancel: handleCancelWechatLogin,
+      }
+    : ssoWaiting
+      ? {
+          title: t("auth.sso_waiting"),
+          hint: t("auth.sso_waiting_hint"),
+          onCancel: handleCancelSsoLogin,
+        }
+      : googleWaiting
+        ? {
+            title: t("auth.google_waiting"),
+            hint: t("auth.sso_waiting_hint"),
+            onCancel: handleCancelGoogleLogin,
+          }
+        : appleWaiting
+          ? {
+              title: t("auth.apple_waiting"),
+              hint: t("auth.sso_waiting_hint"),
+              onCancel: handleCancelAppleLogin,
+            }
+          : null;
+
+  const waitingNotice = waitingState ? (
+    <div className="space-y-1.5 text-center" data-testid="oauth-waiting">
+      <p className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+        <Loader2 className="size-3.5 shrink-0 animate-spin" />
+        <span>{waitingState.title}</span>
+      </p>
+      <p className="text-2xs leading-relaxed text-muted-foreground text-pretty">
+        {waitingState.hint}
+      </p>
+      <Button
+        size="sm"
+        variant="ghost"
+        className="h-7 text-xs"
+        onClick={waitingState.onCancel}
+      >
+        {t("auth.wechat_cancel")}
+      </Button>
+    </div>
+  ) : null;
+
   return (
     /* Locked to the viewport with no page scroll: the column is sized to fit
        the compact welcome window (690×450, see AuthGate). Theme-driven tokens
@@ -884,7 +1187,7 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
           "relative z-10 flex min-w-0 flex-col",
           web
             ? "w-full items-center justify-center px-7 pb-5 pt-14 lg:w-1/2"
-            : "w-1/2 px-8 pb-3 pt-[63px]",
+            : "w-1/2 min-h-0 overflow-y-auto px-8 pb-2.5 pt-[54px]",
         )}
       >
         {/* Top Logo */}
@@ -892,7 +1195,7 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
           type="button"
           aria-label="Lynse"
           onClick={handleLogoTap}
-          className={cn("block cursor-default", web ? "mx-auto mb-5 mt-2" : "mb-6 self-start")}
+          className={cn("block cursor-default", web ? "mx-auto mb-5 mt-2" : "mb-5 self-start")}
         >
           <img src={LYNSE_LOGO_SRC} alt="" className="h-5 w-auto dark:invert" />
         </button>
@@ -914,14 +1217,17 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
           </h1>
           <p className={cn(
             "leading-relaxed text-muted-foreground",
-            web ? "mt-2.5 break-words text-center text-[13px]" : "mt-2 text-xs",
+            web ? "mt-2.5 break-words text-center text-[13px]" : "mt-1.5 text-xs",
           )}>
             {subtitle ?? t("auth.login_subtitle")}
           </p>
 
-          <div className="mt-7 w-full">
+          <div className={cn("w-full", web ? "mt-7" : "mt-5")}>
           {activeView === "more" ? (
           /* ── More ways to sign in ─────────────────────── */
+          !web && waitingNotice ? (
+            <div className="py-4">{waitingNotice}</div>
+          ) : (
           <div className="space-y-4">
             <p className="text-center text-sm font-medium">
               {t("auth.more_login")}
@@ -1019,6 +1325,7 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
               )}
             </div>
           </div>
+          )
         ) : activeView !== "api" ? (
           activeView === "qr" ? (
             /* ── App-scanned QR code sign-in ──────────────── */
@@ -1070,39 +1377,54 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
           ) : (
             /* ── Unified Account / Verification Code (Muse progressive single-input) ── */
             <>
-              {web && (
+              {!web && intl && waitingNotice ? (
+                <div className="mb-4 rounded-2xl border border-border/50 bg-muted/20 px-4 py-3.5">
+                  {waitingNotice}
+                </div>
+              ) : (intl || web) && (
                 <>
                   <div className="space-y-2">
                     {intl ? (
                       <>
+                        {/* Google full-width pill — desktop prefers the native
+                            loopback flow (system browser, RFC 8252) when the
+                            desktop OAuth client is configured; otherwise the
+                            standalone auth-window relay page, and Google
+                            refuses popups inside embedded WebViews either way. */}
                         <button
                           type="button"
                           onClick={() => {
+                            if (!web && getGoogleNativeLoginConfig() && getDesktopAppApi()?.googleNative) {
+                              void handleGoogleNativeLogin();
+                              return;
+                            }
+                            if (!web && getDesktopAppApi()?.google) {
+                              void handleGoogleRelayLogin();
+                              return;
+                            }
                             if (!googleReady) { toast(t("auth.google_pending")); return; }
                             void handleGoogleLogin();
                           }}
                           data-testid="google-login"
-                          disabled={googleBusy}
-                          className={webProviderButtonClass}
+                          disabled={googleBusy || googleWaiting}
+                          className={providerButtonClass}
                         >
+                          <GoogleIcon className="size-4 shrink-0" />
                           <span className="text-sm">{t("auth.google_login")}</span>
                         </button>
                         <button
                           type="button"
                           onClick={() => {
-                            setError(null);
-                            void renderAppleLoginUrl()
-                              .then((url) => {
-                                if (!isAppleAuthorizeUrlConfigured(url)) {
-                                  toast(t("auth.apple_pending"));
-                                  return;
-                                }
-                                startAppleLogin(url);
-                              })
-                              .catch((e: unknown) => setError(authErrorText(e, t, "auth.login_failed")));
+                            if (!web && getDesktopAppApi()?.apple) {
+                              void handleAppleDesktopLogin();
+                            } else {
+                              void handleAppleWebLogin();
+                            }
                           }}
-                          className={webProviderButtonClass}
+                          disabled={appleBusy || appleWaiting}
+                          className={providerButtonClass}
                         >
+                          <AppleIcon className="size-4 shrink-0 text-foreground" />
                           <span className="text-sm">{t("auth.apple_login")}</span>
                         </button>
                       </>
@@ -1112,7 +1434,7 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
                           type="button"
                           onClick={() => void handleAppleWebLogin()}
                           disabled={appleBusy}
-                          className={webProviderButtonClass}
+                          className={providerButtonClass}
                         >
                           <AppleIcon className="size-4" />
                           <span className="text-sm">{t("auth.apple_login")}</span>
@@ -1120,7 +1442,7 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
                         <button
                           type="button"
                           onClick={() => void handleWechatQrLogin()}
-                          className={webProviderButtonClass}
+                          className={providerButtonClass}
                         >
                           <WechatIcon className="size-4" />
                           <span className="text-sm">{t("auth.wechat_qr_login")}</span>
@@ -1128,10 +1450,10 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
                       </>
                     )}
                   </div>
-                  <div className="my-4 flex items-center gap-3 text-2xs text-muted-foreground">
-                    <span className="h-px flex-1 bg-border" />
-                    {t("auth.or_divider")}
-                    <span className="h-px flex-1 bg-border" />
+                  <div className={cn("flex items-center gap-3 text-2xs text-muted-foreground/80", web ? "my-4" : "my-3")}>
+                    <span className="h-px flex-1 bg-border/60" />
+                    <span>{t("auth.or_divider")}</span>
+                    <span className="h-px flex-1 bg-border/60" />
                   </div>
                 </>
               )}
@@ -1184,7 +1506,7 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
                     <p className="mt-2 text-center text-xs text-destructive">{smsError}</p>
                   )}
 
-                  <div className="mt-4">
+                  <div className={web ? "mt-4" : "mt-3"}>
                     <AgreementCheckbox
                       agreed={agreed}
                       onToggle={() => setAgreed(!agreed)}
@@ -1265,7 +1587,7 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
                     <p className="mt-2 text-center text-xs text-destructive">{smsError}</p>
                   )}
 
-                  <div className="mt-4">
+                  <div className={web ? "mt-4" : "mt-3"}>
                     <AgreementCheckbox
                       agreed={agreed}
                       onToggle={() => setAgreed(!agreed)}
@@ -1275,90 +1597,52 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
                 </>
               )}
 
-              {!web && <div className="mt-7">
-                <div className="flex items-center gap-3 text-2xs text-muted-foreground/80">
-                  <span className="h-px flex-1 bg-border/50" />
-                  <span>{t("auth.or_divider")}</span>
-                  <span className="h-px flex-1 bg-border/50" />
+              {!web && !intl && (
+                waitingNotice ? (
+                  <div className="mt-5">{waitingNotice}</div>
+                ) : (
+                <div className="mt-5">
+                  <div className="flex items-center gap-3 text-2xs text-muted-foreground/80">
+                    <span className="h-px flex-1 bg-border/60" />
+                    <span>{t("auth.or_divider")}</span>
+                    <span className="h-px flex-1 bg-border/60" />
+                  </div>
+                  <div className="mt-3.5 grid grid-cols-2 gap-2.5">
+                    {/* WeChat Pill Button */}
+                    <button
+                      type="button"
+                      onClick={handleWechatLogin}
+                      disabled={wechatWaiting}
+                      title={t("auth.wechat_login")}
+                      aria-label={t("auth.wechat_login")}
+                      className="flex h-9 items-center justify-center gap-2 rounded-full border border-border/50 bg-muted/40 px-3 text-xs font-medium transition-colors hover:bg-muted/80 disabled:opacity-50"
+                    >
+                      <WechatIcon className="size-4 shrink-0 text-[#07C160]" />
+                      <span className="truncate">{t("auth.wechat")}</span>
+                    </button>
+
+                    {/* Apple Pill Button */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (getDesktopAppApi()?.apple) {
+                          void handleAppleDesktopLogin();
+                        } else {
+                          void handleAppleWebLogin();
+                        }
+                      }}
+                      disabled={appleBusy || appleWaiting}
+                      title={t("auth.apple_login")}
+                      aria-label={t("auth.apple_login")}
+                      className="flex h-9 items-center justify-center gap-2 rounded-full border border-border/50 bg-muted/40 px-3 text-xs font-medium text-foreground transition-colors hover:bg-muted/80 disabled:opacity-50"
+                    >
+                      <AppleIcon className="size-4 shrink-0 text-foreground" />
+                      <span className="truncate">Apple</span>
+                    </button>
+                  </div>
                 </div>
-                <div className="mt-4 flex items-center justify-center gap-5">
-                  {intl ? (
-                    <>
-                      {/* Google Icon Button */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (!googleReady) { toast(t("auth.google_pending")); return; }
-                          void handleGoogleLogin();
-                        }}
-                        disabled={googleBusy}
-                        data-testid="google-login"
-                        title={t("auth.google_login")}
-                        aria-label={t("auth.google_login")}
-                        className="flex size-10 items-center justify-center rounded-full border border-border/60 bg-muted/30 shadow-2xs transition-all hover:bg-muted hover:border-border hover:scale-105 active:scale-95 disabled:opacity-50"
-                      >
-                        <GoogleIcon className="size-4.5" />
-                      </button>
-
-                      {/* Apple Icon Button */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setError(null);
-                          void renderAppleLoginUrl()
-                            .then((url) => {
-                              if (!isAppleAuthorizeUrlConfigured(url)) {
-                                toast(t("auth.apple_pending"));
-                                return;
-                              }
-                              startAppleLogin(url);
-                            })
-                            .catch((e: unknown) => setError(authErrorText(e, t, "auth.login_failed")));
-                        }}
-                        disabled={appleBusy || appleWaiting}
-                        title={t("auth.apple_login")}
-                        aria-label={t("auth.apple_login")}
-                        className="flex size-10 items-center justify-center rounded-full border border-border/60 bg-muted/30 text-foreground shadow-2xs transition-all hover:bg-muted hover:border-border hover:scale-105 active:scale-95 disabled:opacity-50"
-                      >
-                        <AppleIcon className="size-4.5 text-foreground" />
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      {/* WeChat Icon Button */}
-                      <button
-                        type="button"
-                        onClick={handleWechatLogin}
-                        disabled={wechatWaiting}
-                        title={t("auth.wechat_login")}
-                        aria-label={t("auth.wechat_login")}
-                        className="flex size-10 items-center justify-center rounded-full border border-border/60 bg-muted/30 text-[#07C160] shadow-2xs transition-all hover:bg-muted hover:border-border hover:scale-105 active:scale-95 disabled:opacity-50"
-                      >
-                        <WechatIcon className="size-5" />
-                      </button>
-
-                      {/* Apple Icon Button */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (getDesktopAppApi()?.apple) {
-                            void handleAppleDesktopLogin();
-                          } else {
-                            void handleAppleWebLogin();
-                          }
-                        }}
-                        disabled={appleBusy || appleWaiting}
-                        title={t("auth.apple_login")}
-                        aria-label={t("auth.apple_login")}
-                        className="flex size-10 items-center justify-center rounded-full border border-border/60 bg-muted/30 text-foreground shadow-2xs transition-all hover:bg-muted hover:border-border hover:scale-105 active:scale-95 disabled:opacity-50"
-                      >
-                        <AppleIcon className="size-4.5 text-foreground" />
-                      </button>
-
-                    </>
-                  )}
-                </div>
-              </div>}
+                )
+              )}
             </>
           )
         ) : (
@@ -1385,65 +1669,11 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
           </div>
         </div>
 
-        {/* Keep the extra Web sign-in options below the centered form. */}
-        {(wechatWaiting || ssoWaiting || appleWaiting) ? (
-          <div className={cn(web ? "mt-5" : "mt-auto pt-3")}>
-            {wechatWaiting ? (
-              <div className="space-y-1.5 text-center">
-                <p className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
-                  <Loader2 className="size-3.5 animate-spin" />
-                  {t("auth.wechat_waiting_scan")}
-                </p>
-                <p className="text-2xs leading-relaxed text-muted-foreground">
-                  {t("auth.wechat_waiting_hint")}
-                </p>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-7 text-xs"
-                  onClick={handleCancelWechatLogin}
-                >
-                  {t("auth.wechat_cancel")}
-                </Button>
-              </div>
-            ) : ssoWaiting ? (
-              <div className="space-y-1.5 text-center">
-                <p className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
-                  <Loader2 className="size-3.5 animate-spin" />
-                  {t("auth.sso_waiting")}
-                </p>
-                <p className="text-2xs leading-relaxed text-muted-foreground">
-                  {t("auth.sso_waiting_hint")}
-                </p>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-7 text-xs"
-                  onClick={handleCancelSsoLogin}
-                >
-                  {t("auth.wechat_cancel")}
-                </Button>
-              </div>
-            ) : (
-              <div className="space-y-1.5 text-center">
-                <p className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
-                  <Loader2 className="size-3.5 animate-spin" />
-                  {t("auth.apple_waiting")}
-                </p>
-                <p className="text-2xs leading-relaxed text-muted-foreground">
-                  {t("auth.sso_waiting_hint")}
-                </p>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-7 text-xs"
-                  onClick={handleCancelAppleLogin}
-                >
-                  {t("auth.wechat_cancel")}
-                </Button>
-              </div>
-            )}
-          </div>
+        {/* Keep the extra Web sign-in options below the centered form. On
+            desktop, waitingNotice already renders inside the compact form so it
+            never overflows the 690×450 welcome window. */}
+        {web && waitingNotice ? (
+          <div className="mt-5">{waitingNotice}</div>
         ) : !hideMoreLogin && web && !intl && activeView === "phone" ? (
           <button
             type="button"
@@ -1453,7 +1683,7 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
             {t("auth.more_login")}
             <ChevronRight className="size-3" />
           </button>
-        ) : !hideMoreLogin && !web ? (
+        ) : !hideMoreLogin && !web && !waitingNotice ? (
           <button
             type="button"
             onClick={() => setView("more")}
@@ -1465,7 +1695,7 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
         ) : null}
 
         {/* ── Bottom site switcher: small subtle text at bottom ── */}
-        {!web && <div className="mt-auto flex items-center justify-center pt-3 pb-1.5 text-2xs text-muted-foreground/60 select-none">
+        {!web && <div className="mt-auto flex items-center justify-center pt-2 pb-1 text-2xs text-muted-foreground/60 select-none">
           <DropdownMenu>
             <DropdownMenuTrigger
               render={

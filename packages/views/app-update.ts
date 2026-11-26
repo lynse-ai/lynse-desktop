@@ -129,6 +129,33 @@ type DesktopAppApi = {
       callback: (callbackUrl: string) => void,
     ) => Promise<() => void>;
   };
+  /** Google sign-in window (desktop only): the web app's /auth/google-desktop
+   * relay page runs the Firebase redirect round trip inside the standalone
+   * window; the done-marker navigation (identityToken fragment + nonce) is
+   * relayed back as a URL. */
+  google?: {
+    openAuthWindow: (url: string, landingOrigin: string, nonce: string) => Promise<void>;
+    closeAuthWindow: () => Promise<void>;
+    onAuthCallback: (
+      callback: (callbackUrl: string) => void,
+    ) => Promise<() => void>;
+  };
+  /** Google native sign-in (RFC 8252, desktop only): a one-shot loopback
+   * listener catches the system browser's code redirect; both token exchanges
+   * (Google → ID token, Google → Firebase ID token) run in the Rust layer. */
+  googleNative?: {
+    openListener: () => Promise<number>;
+    stopListener: () => Promise<void>;
+    onCallback: (callback: (callbackUrl: string) => void) => Promise<() => void>;
+    exchangeCode: (
+      code: string,
+      verifier: string,
+      redirectUri: string,
+      clientId: string,
+      clientSecret?: string,
+    ) => Promise<{ id_token: string }>;
+    firebaseSignIn: (googleIdToken: string, apiKey: string) => Promise<{ id_token: string }>;
+  };
 };
 
 /** Access the desktop update API, or null when running outside the Tauri host. */

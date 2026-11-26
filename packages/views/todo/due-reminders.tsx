@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect } from "react";
+import { type ReactNode, useCallback, useEffect } from "react";
 import { toast } from "sonner";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { type TodoItem } from "./todo-api";
@@ -34,6 +34,15 @@ import { useNavigation } from "../navigation";
 
 export const REMINDER_ENABLED_KEY = "lynse.todos.reminderEnabled";
 const POLL_MS = 30_000;
+const MAX_TOAST_PREVIEW_ITEMS = 3;
+const MAX_TOAST_TITLE_CHARS = 80;
+
+/** Collapse whitespace/newlines and cap length so a single long title never blows out a toast. */
+export function truncateReminderText(text: string, maxChars = MAX_TOAST_TITLE_CHARS): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxChars) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
+}
 
 /** Bell toggle state; reminders default on. */
 export function todoRemindersEnabled(): boolean {
@@ -95,9 +104,9 @@ export function TodoDueRemindersWatcher() {
 
       // The unified surface is the OS notification center; the in-app toast
       // (with its jump action) only covers the web and an ungranted desktop
-      // permission, where a several-titles batch would overflow the window.
+      // permission, where unbounded content would overflow the window.
       const jump = () => navigate.push("/todo");
-      const toastFallback = (title: string, description?: string) =>
+      const toastFallback = (title: ReactNode, description?: ReactNode) =>
         toast(title, { description, duration: 8000, action: { label: t("todo.due_open_page"), onClick: jump } });
 
       if (due.length === 1) {
@@ -106,17 +115,38 @@ export function TodoDueRemindersWatcher() {
         const { todo } = first;
         const time = formatDueDisplay(todo);
         const timeText = time ? t("todo.due_toast_body", { time }) : undefined;
+        const compactTitle = truncateReminderText(todo.title, 120);
         void notifyDue(
           t("todo.due_notification_title"),
-          timeText ? `${todo.title} · ${timeText}` : todo.title,
-          () => toastFallback(todo.title, timeText),
+          timeText ? `${compactTitle} · ${timeText}` : compactTitle,
+          () =>
+            toastFallback(
+              <span className="line-clamp-2 break-words">{compactTitle}</span>,
+              timeText,
+            ),
         );
       } else {
-        const titles = due.map(({ todo }) => todo.title);
+        const titles = due.map(({ todo }) => truncateReminderText(todo.title));
         // Keep the OS notification body readable — list the first few only.
         const body = titles.slice(0, 5).join("、") + (titles.length > 5 ? "…" : "");
+        const preview = due.slice(0, MAX_TOAST_PREVIEW_ITEMS);
+        const extraCount = due.length - preview.length;
         void notifyDue(t("todo.due_batch_title", { n: due.length }), body, () =>
-          toastFallback(t("todo.due_batch_title", { n: due.length }), titles.join("、")),
+          toastFallback(
+            t("todo.due_batch_title", { n: due.length }),
+            <div className="mt-0.5 flex min-w-0 flex-col gap-0.5">
+              {preview.map(({ todo }) => (
+                <p key={todo.id} className="truncate">
+                  · {truncateReminderText(todo.title)}
+                </p>
+              ))}
+              {extraCount > 0 && (
+                <p className="text-muted-foreground">
+                  {t("todo.due_batch_more", { n: extraCount })}
+                </p>
+              )}
+            </div>,
+          ),
         );
       }
     },

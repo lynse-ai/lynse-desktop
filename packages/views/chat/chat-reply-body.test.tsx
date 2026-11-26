@@ -24,8 +24,18 @@ describe("interrupted chat replies", () => {
     expect(screen.getByRole("alert").textContent).toContain("timeout");
   });
   it("marks failed tools without a success checkmark", () => {
-    render(<ToolActivity tools={[{ id: "visual", name: "生成图文", state: "error" }]} />);
-    expect(screen.getByLabelText("chat.tool_failed")).toBeTruthy();
-    expect(document.querySelector(".text-success")).toBeNull();
+    const { container } = render(<ToolActivity tools={[{ id: "visual", name: "生成图文", state: "error" }]} />);
+    expect(screen.getByLabelText("chat.tool_failed").classList.contains("text-destructive")).toBe(true);
+    expect(container.querySelector(".lucide-check")).toBeNull();
+  });
+  it("shows skill loads as reads and uses muted icons for normal tool activity", () => {
+    const { container } = render(<ToolActivity tools={[
+      { id: "read", name: "load_note_review_skill", state: "done" },
+      { id: "stop", name: "kill_task", state: "done" },
+    ]} />);
+    expect(screen.getByText("chat.tool_read")).toBeTruthy();
+    expect(screen.getByText("chat.tool_stop")).toBeTruthy();
+    expect(container.querySelector(".lucide-file-search")?.classList.contains("text-muted-foreground")).toBe(true);
+    expect(container.querySelector(".lucide-circle-stop")?.classList.contains("text-muted-foreground")).toBe(true);
   });
 });

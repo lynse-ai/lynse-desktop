@@ -51,6 +51,7 @@ deploy/www-lynse-ai/deploy.sh "$BUNDLE"
 
 ## 发版记录
 
+- 2026-11-25：bundle 20261125-225617。新增桌面国际版 Google 登录**独立授权窗口中继页** `/app/auth/google-desktop`（桌面 `google_auth_window` 开窗 → 页面内跑 Firebase signInWithRedirect 往返 → done 标记 `/app/auth/google-desktop/done?nonce=…#identityToken=…` 被 Rust 窗口拦截回传）。同时修复 `appleWebLandingOrigin` 的 api-en.lynse.ai → www.lynse.ai 映射（此前落到 www.lynse.cn）。验证：`/app/auth/google-desktop?nonce=x` 200、头像 GIF 200、/app/home 200。桌面侧（google_auth_window 命令 + login-page 接线）未提交待发版——旧桌面 + 本 web 无影响。注：本次构建包含工作区未提交的登录轮播 i18n 与 chat store 小改动（全部测试绿）。
 - 2026-11-18 下午：bundle 20261118-132823。API 切回 **api-en.lynse.ai（生产）** + intl + Firebase 四值，Google 登录恢复（真机验证：弹窗→选账号→直接进应用）；同步把 lynse-mcp 桥接账号系统 `/etc/lynse-mcp-ai-test/environment` 的 `LYNSE_ACCOUNT_API_ORIGIN` 从 gapp 切到 api-en（授权管理页真机验证正常，授权记录从零开始）。上午 bundle 20261118-125738（3bbfa5d1 + intl，API 仍指 gapp）是为修 cn 回退问题，但其 gapp 指向 + 无 Firebase 配置导致谷歌登录失效，已由本次发版取代。
 - 2026-11-18：bundle 20261118-125738，tar sha256 7b0eb78d…（3bbfa5d1 + `NEXT_PUBLIC_LYNSE_EDITION=intl`：修复登录页/连接器误用 cn 版——此前构建命令漏该环境变量，编译期回退 cn）。API 仍指向 gapp 测试后端（MCP 桥接一致性约束，见下节）。
 

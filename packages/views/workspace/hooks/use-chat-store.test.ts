@@ -175,7 +175,13 @@ describe("concurrent chat conversations", () => {
     expect(fake.runs[0]!.opts!.query).toBe("one");
   });
 
-  it("marks a completed background reply unread and stores it in its conversation", async () => {
+  it.each([
+    ["zh-Hans", "小灵助手已完成回复"],
+    ["en", "Lina Assistant has finished replying."],
+  ])("marks background replies unread and shows a localized toast in %s", async (language, completionMessage) => {
+    const { default: i18next } = await import("i18next");
+    const { RESOURCES } = await import("../../locales");
+    await i18next.init({ lng: language, resources: RESOURCES });
     const { sendMessage, clearMessages } = store.getState();
     sendMessage("one");
     clearMessages();
@@ -200,7 +206,7 @@ describe("concurrent chat conversations", () => {
 
     // The active conversation (two) is untouched by the background reply.
     expect(conversationByUserText("two").messages.at(-1)!.content).toBe("");
-    expect(toast.success).toHaveBeenCalledWith("小灵助手已完成回复");
+    expect(toast.success).toHaveBeenCalledWith(completionMessage);
   });
 
   it("stores the human-support link from the done payload", () => {

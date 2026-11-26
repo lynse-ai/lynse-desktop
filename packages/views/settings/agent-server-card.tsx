@@ -51,7 +51,7 @@ function applyAgentUrl(url: string) {
 }
 
 /**
- * Server-address picker for the Xiaoling (小灵助手) assistant. "follow" rides
+ * Server-address picker for the Lina (小灵助手) assistant. "follow" rides
  * the main Lynse backend (gateway-fronted agent routes); "cloudbase" points
  * straight at the CloudBase-hosted lynclaw deployment (route B, bypassing the
  * gateway — the default after login via the agent-URL mapping); "custom"

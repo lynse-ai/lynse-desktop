@@ -8,9 +8,11 @@ import { createAuthStore, registerAuthStore } from "@lynse/core/auth";
 import { getDesktopAppApi } from "../app-update";
 import { LoginPage } from "./login-page";
 import { configureBuildChannel } from "../feature-flags";
+import { changeLanguage } from "@lynse/core/i18n/react";
 
 vi.mock("@lynse/core/i18n/react", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
+  changeLanguage: vi.fn(),
 }));
 vi.mock("sonner", () => ({ toast: vi.fn() }));
 vi.mock("../app-update", () => ({ getDesktopAppApi: vi.fn(), openExternalUrl: vi.fn() }));
@@ -398,6 +400,7 @@ describe("desktop Apple sign-in", () => {
       expect(localStorage.getItem("lynse_edition")).toBe("cn");
       expect(localStorage.getItem("lynse_api_url")).toBe("https://api.lynse.cn");
       expect(screen.getByPlaceholderText("auth.sms_phone_placeholder")).toBeTruthy();
+      expect(changeLanguage).toHaveBeenCalledWith("zh-Hans");
     });
   });
 

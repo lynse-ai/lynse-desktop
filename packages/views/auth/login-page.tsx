@@ -76,7 +76,7 @@ import {
   sendSmsCaptcha,
   smsSessionFromLogin,
 } from "@lynse/core/auth/sms";
-import { useTranslation } from "@lynse/core/i18n/react";
+import { changeLanguage, useTranslation } from "@lynse/core/i18n/react";
 import { ArrowRight, Check, ChevronDown, ChevronRight, KeyRound, Loader2, QrCode } from "../icons";
 import {
   DropdownMenu,
@@ -161,6 +161,7 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
     if (newEdition === edition) return;
     setEdition(newEdition);
     setEditionState(newEdition);
+    if (newEdition === "cn") void changeLanguage("zh-Hans");
 
     // Switch default API gateway & agent URL
     const newApiUrl = defaultApiUrlForEdition(newEdition);

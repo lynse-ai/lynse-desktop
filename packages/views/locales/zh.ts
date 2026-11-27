@@ -756,7 +756,7 @@ const zh = {
     account_minutes: "转写时长",
     account_minutes_unlimited: "不限时长",
     account_booster: "加油包",
-    account_booster_hint: "加油包是单独购买的额外积分，在基础积分耗尽后才会被使用。",
+    account_booster_hint: "加油包是单独购买的额外时长，已计入剩余额度中。",
     account_monthly_gift: "月赠",
     account_monthly_gift_hint: "历史上每月登录奖励累计赠送的积分",
     account_points_history_hint: "积分的购入、消耗与退还明细（新在上）",

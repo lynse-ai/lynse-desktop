@@ -3,6 +3,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 beforeEach(() => vi.resetModules());
 afterEach(() => vi.unstubAllGlobals());
 
+it("updates the automatic locale when the active business gateway changes", async () => {
+  const { initCore } = await import("./core-provider");
+  const { api } = await import("../api/client");
+  const { initI18n } = await import("../i18n");
+  const { default: i18next } = await import("i18next");
+  vi.stubGlobal("navigator", { languages: ["zh-CN"] });
+  const gateway = "https://api.lynse.cn";
+  initI18n({ apiBaseUrl: gateway });
+  initCore(gateway, {
+    getItem: () => null,
+    setItem: vi.fn(),
+    removeItem: vi.fn(),
+  });
+
+  expect(i18next.language).toBe("zh-Hans");
+  api().setBaseUrl("https://api-en.lynse.ai");
+  expect(i18next.language).toBe("en");
+  api().setBaseUrl("https://gapp.lynse.cn");
+  expect(i18next.language).toBe("zh-Hans");
+});
+
 describe("Connections routing at startup", () => {
   it.each([
     { http: 401, code: "unauthorized", message: "error.integrations.unauthorized" },

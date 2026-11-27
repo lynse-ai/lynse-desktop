@@ -760,7 +760,7 @@ const ko = {
     account_minutes: "변환 시간",
     account_minutes_unlimited: "무제한",
     account_booster: "부스터 팩",
-    account_booster_hint: "부스터 팩은 별도 구매한 추가 포인트로, 기본 포인트를 모두 사용한 후에 소모됩니다.",
+    account_booster_hint: "부스터 팩은 별도 구매한 추가 크레딧이며 잔여 크레딧에 포함되어 있습니다.",
     account_monthly_gift: "월간 보너스",
     account_monthly_gift_hint: "매월 로그인 보상으로 지급된 포인트 누적",
     account_points_history_hint: "포인트 구매·사용·환불 내역 (최신순)",

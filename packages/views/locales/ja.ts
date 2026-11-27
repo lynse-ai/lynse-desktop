@@ -761,7 +761,7 @@ const ja = {
     account_minutes: "文字起こし時間",
     account_minutes_unlimited: "無制限",
     account_booster: "ブースターパック",
-    account_booster_hint: "ブースターパックは別途購入した追加ポイントで、基本ポイントを使い切った後に使われます。",
+    account_booster_hint: "ブースターパックは別途購入した追加クレジットで、残高に含まれています。",
     account_monthly_gift: "月次ボーナス",
     account_monthly_gift_hint: "毎月のログインボーナスで付与されたポイントの累計",
     account_points_history_hint: "ポイントの購入・消費・返金の明細（新しい順）",

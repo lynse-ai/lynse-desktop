@@ -346,7 +346,41 @@ impl CardAccount {
         })
     }
 
-    pub(super) async fn fetch_fallback_credential(
+    async fn send_with_pinned_fallback(
+        &self,
+        make_req: impl Fn(&reqwest::Client) -> reqwest::RequestBuilder,
+        source: &str,
+    ) -> Result<reqwest::Response, OwnershipError> {
+        let std_client = CLIENT.as_ref().map_err(|err| {
+            log::error!("[recording-card] standard client init failed: {err}");
+            OwnershipError::Unavailable
+        })?;
+        match SECURE_CLIENT.as_ref() {
+            Ok(sec_client) => match make_req(sec_client).send().await {
+                Ok(resp) => Ok(resp),
+                Err(e) => {
+                    log::debug!(
+                        "[recording-card] {source} secure client failed: {e}, falling back to standard client"
+                    );
+                    make_req(std_client).send().await.map_err(|fallback_err| {
+                        log::warn!("[recording-card] {source} credential fetch failed: {fallback_err}");
+                        OwnershipError::Unavailable
+                    })
+                }
+            },
+            Err(sec_err) => {
+                log::warn!(
+                    "[recording-card] secure client unavailable: {sec_err}, using standard client"
+                );
+                make_req(std_client).send().await.map_err(|e| {
+                    log::warn!("[recording-card] {source} credential fetch failed: {e}");
+                    OwnershipError::Unavailable
+                })
+            }
+        }
+    }
+
+    pub(super) async fn fetch_mcp_credential(
         &self,
         access: &CardAccess,
         vendor_id: Option<u16>,
@@ -357,29 +391,29 @@ impl CardAccount {
             "{}/platform/oauth/api/agent/device/recording-card/credential",
             self.mcp_origin()
         );
-        let std_client = CLIENT.as_ref().map_err(|err| {
-            log::error!("[recording-card] standard client init failed: {err}");
-            OwnershipError::Unavailable
-        })?;
-        let mut req = std_client
-            .post(&mcp_endpoint)
-            .header(AUTHORIZATION, token_header)
-            .header(CACHE_CONTROL, "no-cache, no-store");
-        if let (Some(vid), Some(pid)) = (vendor_id, product_id) {
-            req = req.json(&serde_json::json!({ "vendorId": vid, "productId": pid }));
-        }
-        let response = req.send().await.map_err(|err| {
-            log::warn!("[recording-card] fallback credential fetch failed ({mcp_endpoint}): {err}");
-            OwnershipError::Unavailable
-        })?;
-        Self::parse_credential_response(response, "mcp-fallback").await
+        let response = self
+            .send_with_pinned_fallback(
+                |client| {
+                    let mut req = client
+                        .post(&mcp_endpoint)
+                        .header(AUTHORIZATION, token_header.clone())
+                        .header(CACHE_CONTROL, "no-cache, no-store");
+                    if let (Some(vid), Some(pid)) = (vendor_id, product_id) {
+                        req = req.json(&serde_json::json!({ "vendorId": vid, "productId": pid }));
+                    }
+                    req
+                },
+                "lynse-agent-auth",
+            )
+            .await?;
+        Self::parse_credential_response(response, "lynse-agent-auth").await
     }
 
-    pub(super) async fn fetch_credential(
+    pub(super) async fn fetch_fallback_credential(
         &self,
         access: &CardAccess,
-        vendor_id: Option<u16>,
-        product_id: Option<u16>,
+        _vendor_id: Option<u16>,
+        _product_id: Option<u16>,
     ) -> Result<CardCredential, OwnershipError> {
         let token_header = Self::bearer_auth_header(&access.token)?;
         let gateway_origin = self.credential_gateway(access);
@@ -392,63 +426,43 @@ impl CardAccount {
         self.bind_agent_session(std_client, &gateway_origin, &access.token)
             .await;
 
-        let send_req = |client: &reqwest::Client| {
-            client
-                .get(&endpoint)
-                .header(AUTHORIZATION, token_header.clone())
-                .header(CACHE_CONTROL, "no-cache, no-store")
-                .send()
-        };
+        let response = self
+            .send_with_pinned_fallback(
+                |client| {
+                    client
+                        .get(&endpoint)
+                        .header(AUTHORIZATION, token_header.clone())
+                        .header(CACHE_CONTROL, "no-cache, no-store")
+                },
+                "agent-config-fallback",
+            )
+            .await?;
+        Self::parse_credential_response(response, "agent-config-fallback").await
+    }
 
-        // Attempt with certificate-pinned secure client first, but gracefully fall back
-        // to standard client if Schannel (Windows), CloudBase root CA, or proxy causes TLS failure.
-        let primary_result = match SECURE_CLIENT.as_ref() {
-            Ok(sec_client) => match send_req(sec_client).await {
-                Ok(resp) => Ok(resp),
-                Err(e) => {
-                    log::debug!("[recording-card] secure client credential fetch failed: {e}, falling back to standard client");
-                    send_req(std_client).await.map_err(|fallback_err| {
-                        log::warn!("[recording-card] agent credential fetch failed: {fallback_err}");
-                        OwnershipError::Unavailable
-                    })
-                }
-            },
-            Err(sec_err) => {
-                log::warn!("[recording-card] secure client unavailable: {sec_err}, using standard client");
-                send_req(std_client).await.map_err(|e| {
-                    log::warn!("[recording-card] agent credential fetch failed: {e}");
-                    OwnershipError::Unavailable
-                })
-            }
-        };
-
-        match primary_result {
-            Ok(response) => match Self::parse_credential_response(response, "agent-config").await {
-                Ok(creds) => Ok(creds),
-                Err(OwnershipError::NotBound) => Err(OwnershipError::NotBound),
-                Err(OwnershipError::Denied) => Err(OwnershipError::Denied),
-                Err(primary_err) => {
-                    log::warn!(
-                        "[recording-card] agent-config failed ({primary_err}), trying site credential fallback ({})",
-                        self.mcp_origin()
-                    );
-                    match self
-                        .fetch_fallback_credential(access, vendor_id, product_id)
-                        .await
-                    {
-                        Ok(creds) => Ok(creds),
-                        Err(OwnershipError::Unavailable) => Err(primary_err),
-                        Err(fallback_err) => Err(fallback_err),
-                    }
-                }
-            },
+    pub(super) async fn fetch_credential(
+        &self,
+        access: &CardAccess,
+        vendor_id: Option<u16>,
+        product_id: Option<u16>,
+    ) -> Result<CardCredential, OwnershipError> {
+        match self.fetch_mcp_credential(access, vendor_id, product_id).await {
+            Ok(creds) => Ok(creds),
+            Err(OwnershipError::NotBound) => Err(OwnershipError::NotBound),
+            Err(OwnershipError::Denied) => Err(OwnershipError::Denied),
             Err(primary_err) => {
                 log::warn!(
-                    "[recording-card] agent-config transport failed ({primary_err}), trying site credential fallback ({})",
+                    "[recording-card] lynse-agent-auth ({}) failed ({primary_err}), trying agent-config fallback",
                     self.mcp_origin()
                 );
-                self.fetch_fallback_credential(access, vendor_id, product_id)
+                match self
+                    .fetch_fallback_credential(access, vendor_id, product_id)
                     .await
+                {
+                    Ok(creds) => Ok(creds),
+                    Err(OwnershipError::Unavailable) => Err(primary_err),
+                    Err(fallback_err) => Err(fallback_err),
+                }
             }
         }
     }

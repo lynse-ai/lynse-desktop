@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@lynse/ui/components/u
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@lynse/ui/components/ui/dialog";
 import { cn } from "@lynse/ui/lib/utils";
 import { UserCircle, Zap, Clock } from "../icons";
-import { useMembership, useUserCredits, usePointsLedger, type MembershipQuota, type PointsLogEntry } from "../layout/use-user-credits";
+import { useMembership, useUserCredits, usePointsLedger, resolveCreditsBalance, type MembershipQuota, type PointsLogEntry } from "../layout/use-user-credits";
 import { useLocalizedPlan } from "../layout/user-profile-dropdown";
 import { memberBadgeSrc } from "./member-badges";
 
@@ -211,8 +211,10 @@ export function AccountCard() {
     ? `${phone.slice(0, 3)}****${phone.slice(-4)}`
     : phone;
 
-  const pointsTotal = credits.pointsAmount ?? 0;
-  const pointsRemaining = Math.max(0, pointsTotal - (credits.usedPointsAmount ?? 0));
+  // Credits and transcription minutes are one currency: the membership quota
+  // (allRemainingMinutes, packs included) is authoritative; the legacy points
+  // fields only back accounts without a minute quota (intl reports them as 0).
+  const balance = resolveCreditsBalance(credits, membership);
 
   const minutes = membershipQuotaRows(membership);
   const minutesTotal = minutes?.total ?? null;
@@ -262,22 +264,25 @@ export function AccountCard() {
               </button>
             ) : null
           }
-          emphasized={<span className="text-warning">{pointsRemaining.toLocaleString()}</span>}
+          emphasized={<span className="text-warning">{balance.remaining.toLocaleString()}</span>}
           extra={
-            ledger && ledger.boosterRemaining !== null && ledger.boosterRemaining > 0 && (
+            balance.packRemaining > 0 && (
               <span
                 className="rounded-full bg-warning/15 px-1.5 py-0.5 text-2xs font-semibold text-warning"
                 title={t("settings.account_booster_hint")}
               >
-                +{ledger.boosterRemaining.toLocaleString()} {t("settings.account_booster")}
+                +{balance.packRemaining.toLocaleString()} {t("settings.account_booster")}
               </span>
             )
           }
-          suffix={` / ${pointsTotal.toLocaleString()}`}
-          fraction={pointsTotal > 0 ? pointsRemaining / pointsTotal : null}
+          suffix={balance.total !== null ? ` / ${balance.total.toLocaleString()}` : undefined}
+          fraction={balance.total !== null && balance.total > 0 ? balance.remaining / balance.total : null}
         />
 
-        {minutesTotal !== null && (
+        {/* The minutes row is the same numbers as Credits whenever the balance
+            is minute-denominated — only legacy points-based accounts that
+            also carry a minute quota need both rows. */}
+        {!balance.minutesBased && minutesTotal !== null && (
           <QuotaRow
             icon={Clock}
             label={t("settings.account_minutes")}

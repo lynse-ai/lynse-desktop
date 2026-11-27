@@ -16,7 +16,13 @@ import { useInspirationCaptureStore, type CaptureMode } from "./capture-store";
 import { ensureInspirationUnlocked, privacyError, useInspirationPrivacy } from "./privacy-state";
 import { parseHashtags, splitByHashRuns, stripHashtags } from "./tags";
 import { formatVoiceDuration, useInspirationVoice } from "./use-inspiration-voice";
-import { saveTodo, type TodoItem } from "../todo/todo-api";
+import {
+  canCreateCloudTodos,
+  createCloudTodos,
+  saveTodo,
+  todoIsCloudRepresentable,
+  type TodoItem,
+} from "../todo/todo-api";
 import { useTodoStore } from "../todo/use-todos";
 import { parseNaturalWhen } from "../todo/natural-date";
 import {
@@ -462,10 +468,26 @@ export function InspirationCaptureSheet() {
           updatedAt: now,
           backend: false,
         };
-        const saved = await saveTodo(todo);
-        // Publish into the shared todo store so the todo page / home feed
-        // pick the new item up without waiting for their next load.
-        useTodoStore.getState().upsert(saved);
+        // Cloud-first: signed-in adds insert through the backend so the
+        // todo reaches every device (the forced reload swaps in the
+        // authoritative copy); failures and signed-out sessions keep the
+        // desktop local store path below.
+        let synced = false;
+        if (canCreateCloudTodos() && todoIsCloudRepresentable(todo)) {
+          try {
+            await createCloudTodos([{ title: todo.title, dueDate: todo.dueDate }]);
+            await useTodoStore.getState().load({ force: true });
+            synced = true;
+          } catch (error) {
+            console.error("[Inspiration] todo cloud insert failed, keeping local:", error);
+          }
+        }
+        if (!synced) {
+          const saved = await saveTodo(todo);
+          // Publish into the shared todo store so the todo page / home feed
+          // pick the new item up without waiting for their next load.
+          useTodoStore.getState().upsert(saved);
+        }
         toast.success(t("inspiration.toast_todo_saved"));
         reset();
         closeCapture();

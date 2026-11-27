@@ -6,7 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { ApiClient, setApiInstance, setApiTransportMode } from "@lynse/core/api/client";
 import { createAuthStore, registerAuthStore } from "@lynse/core/auth";
-import { useUserCredits } from "./use-user-credits";
+import { useUserCredits, resolveCreditsBalance } from "./use-user-credits";
 import { getContextInboxEnabled, setContextInboxEnabled } from "../notifications/context-inbox-preferences";
 
 let client: ApiClient;
@@ -75,5 +75,43 @@ describe("restored account identity without the optional inbox", () => {
       resolve(Response.json({ code: 200, data: { id: "u1", nickname: "Old" } }));
     });
     expect(auth.getState().user?.id).not.toBe("u1");
+  });
+});
+
+describe("resolveCreditsBalance", () => {
+  it("reads the membership minute quota (intl shape: legacy points always 0)", () => {
+    const balance = resolveCreditsBalance(
+      { pointsAmount: 0, usedPointsAmount: 0 } as never,
+      { allRemainingMinutes: 766, totalMinutes: 1000, paidPackageRemainingMinutes: 100 },
+    );
+    expect(balance).toEqual({ remaining: 766, total: 1000, packRemaining: 100, minutesBased: true });
+  });
+
+  it("falls back to remainingMinutes when allRemainingMinutes is absent", () => {
+    const balance = resolveCreditsBalance(undefined, { remainingMinutes: 42 });
+    expect(balance).toMatchObject({ remaining: 42, minutesBased: true, packRemaining: 0 });
+  });
+
+  it("omits the total when the quota carries no totalMinutes", () => {
+    expect(resolveCreditsBalance(undefined, { allRemainingMinutes: 5 }).total).toBeNull();
+  });
+
+  it("uses legacy points only when no minute quota exists", () => {
+    const balance = resolveCreditsBalance({ pointsAmount: 300, usedPointsAmount: 80 } as never);
+    expect(balance).toEqual({ remaining: 220, total: 300, packRemaining: 0, minutesBased: false });
+  });
+
+  it("prefers the quota even when legacy points are positive", () => {
+    const balance = resolveCreditsBalance(
+      { pointsAmount: 300, usedPointsAmount: 80 } as never,
+      { allRemainingMinutes: 10, totalMinutes: 1000 },
+    );
+    expect(balance).toMatchObject({ remaining: 10, minutesBased: true });
+  });
+
+  it("clamps negatives and treats a quota without numeric minutes as legacy points", () => {
+    expect(resolveCreditsBalance({ pointsAmount: 10, usedPointsAmount: 99 } as never).remaining).toBe(0);
+    const balance = resolveCreditsBalance({ pointsAmount: 50, usedPointsAmount: 20 } as never, {});
+    expect(balance).toEqual({ remaining: 30, total: 50, packRemaining: 0, minutesBased: false });
   });
 });

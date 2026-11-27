@@ -756,7 +756,7 @@ const zhHant = {
     account_minutes: "轉寫時長",
     account_minutes_unlimited: "不限時長",
     account_booster: "加油包",
-    account_booster_hint: "加油包是單獨購買的額外點數，在基礎點數耗盡後才會被使用。",
+    account_booster_hint: "加油包是單獨購買的額外時長，已計入剩餘額度中。",
     account_monthly_gift: "月贈",
     account_monthly_gift_hint: "歷史上每月登入獎勵累計贈送的點數",
     account_points_history_hint: "點數的購入、消耗與退還明細（新在上）",

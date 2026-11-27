@@ -59,7 +59,7 @@ import { useTranslation, changeLanguage } from "@lynse/core/i18n/react";
 import { useAppUpdate, getAppInfoSync, openAppUpdateDialog } from "../app-update";
 import { openAboutWindow } from "../about/open-about";
 import { featureFlags } from "../feature-flags";
-import { useUserCredits, useMembership, useUpdateNickname } from "./use-user-credits";
+import { useUserCredits, useMembership, useUpdateNickname, resolveCreditsBalance } from "./use-user-credits";
 import { FolderTreeSection } from "../workspace/sidebar/folder-tree-section";
 import { SettingsDialog } from "../settings/settings-dialog";
 import { UploadDialog } from "../workspace/upload-dialog";
@@ -263,17 +263,18 @@ function CreditsPopover() {
   const { data: membership } = useMembership();
 
   const plan = useLocalizedPlan(membership?.memberLevel || data?.benefitType);
-  const totalMin = membership?.totalMinutes ?? 0;
-  const usedMin = membership?.usedMinutes ?? 0;
-  const remainingMin = membership?.remainingMinutes ?? Math.max(0, totalMin - usedMin);
+  // One currency: the membership minute quota (duration packs included) is
+  // the minutes row; legacy points only render for accounts without a quota.
+  const balance = resolveCreditsBalance(data, membership);
+  const totalMin = balance.total ?? 0;
+  const remainingMin = balance.remaining;
   const isUnlimited = membership?.unlimited === true;
   const percentage = totalMin > 0 ? Math.min(100, Math.max(0, (remainingMin / totalMin) * 100)) : 0;
 
-  // Also show points if available from customer/current
   const pointsTotal = data?.pointsAmount ?? 0;
   const pointsUsed = data?.usedPointsAmount ?? 0;
   const pointsRemaining = Math.max(0, pointsTotal - pointsUsed);
-  const hasPoints = pointsTotal > 0;
+  const hasPoints = !balance.minutesBased && pointsTotal > 0;
 
   return (
     <Popover>
@@ -290,8 +291,8 @@ function CreditsPopover() {
             <span className="text-sm font-medium">{plan}</span>
           </div>
 
-          {/* Minutes quota (from membership API) */}
-          {(totalMin > 0 || isUnlimited) && (
+          {/* Minutes quota (membership minute quota, packs included) */}
+          {balance.minutesBased && (totalMin > 0 || isUnlimited) && (
             <div className="flex flex-col gap-1.5">
               <div className="flex items-center justify-between">
                 <span className="text-xs text-muted-foreground">{t("layout.minutes")}</span>

@@ -1,13 +1,23 @@
 import type { SourceRef } from "../workbench/types";
-import { saveTodo, type TodoItem } from "./todo-api";
+import {
+  canCreateCloudTodos,
+  createCloudTodos,
+  saveTodo,
+  todoIsCloudRepresentable,
+  type TodoItem,
+} from "./todo-api";
 import { useTodoStore } from "./use-todos";
 
 /**
  * Shared "convert to todos" path for the extraction surfaces (live-notes
- * panel, chat checklists): persist local todos through the same store the
- * capture sheet uses and publish them into the shared todo store so the
- * page / feed / heatmap pick them up without a reload. Callers own the
- * toast + duplicate guard.
+ * panel, chat checklists): seeds the cloud insert contract can represent go
+ * through `/api/business/file/todo/insert` (per lynse-cli `todos add`) so
+ * they reach every device, while seeds carrying evidence notes or workbench
+ * refs stay in the desktop local store like before — an insert never
+ * silently drops content. Any cloud failure falls back to saving the whole
+ * batch locally. The page / feed / heatmap pick the new items up through
+ * the shared todo store without a manual reload. Callers own the toast +
+ * duplicate guard.
  */
 
 export interface TodoSeed {
@@ -50,11 +60,43 @@ export async function createTodosFromSeeds(seeds: TodoSeed[]): Promise<TodoItem[
   }
   if (pending.length === 0) return [];
 
+  const store = useTodoStore.getState();
+  // Cloud-first batch for the representable seeds; the rest keep the local
+  // path. A failed insert moves the whole batch to the local store so the
+  // caller's success/failure story stays atomic.
+  const syncable = canCreateCloudTodos()
+    ? pending.filter((todo) => todoIsCloudRepresentable(todo))
+    : [];
+  const localOnly = syncable.length > 0
+    ? pending.filter((todo) => !syncable.includes(todo))
+    : pending;
+  let cloudSynced = false;
+  if (syncable.length > 0) {
+    try {
+      await createCloudTodos(
+        syncable.map((todo) => ({
+          title: todo.title,
+          dueDate: todo.dueDate,
+          owner: todo.owner,
+        })),
+      );
+      cloudSynced = true;
+    } catch (e) {
+      console.error("[Todo] cloud insert failed, falling back to local:", e);
+      localOnly.push(...syncable);
+    }
+  }
+
   const saved: TodoItem[] = [];
-  for (const todo of pending) {
+  for (const todo of localOnly) {
     saved.push(await saveTodo(todo));
   }
-  const store = useTodoStore.getState();
   for (const item of saved) store.upsert(item);
-  return saved;
+  // Cloud-inserted items only exist server-side (with server-assigned ids
+  // the client never sees from the insert response) — a forced reload is
+  // what swaps the placeholders out of the UI for the authoritative copies.
+  if (cloudSynced) await store.load({ force: true });
+  // Callers only consume the count; cloud-path entries are the transient
+  // placeholders that the reload replaces with backend items.
+  return cloudSynced ? [...syncable, ...saved] : saved;
 }

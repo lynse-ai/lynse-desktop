@@ -6,11 +6,15 @@
  * API-key + token auth handled by the shared ApiClient). Todos extracted
  * from meetings live there, so the page shows them without any local setup.
  *
- * A local Rust-backed store (`desktopAPI.todo` → `local-todos`) remains for
- * manually added todos (and their calendar metadata). On every load the two
- * sources are merged: cloud items carry `backend: true`, local ones do not.
- * When the cloud is unreachable or the user is not signed in, we silently
- * fall back to the local store only.
+ * A local Rust-backed store (`desktopAPI.todo` → `local-todos`) remains as
+ * the fallback for manually added todos (and their calendar metadata):
+ * signed-in adds now go cloud-first through `/api/business/file/todo/insert`
+ * (contract per lynse-cli `todos add`) so they reach every device, and only
+ * fall back to the local store when the insert fails or carries metadata the
+ * cloud contract can't represent. On every load the two sources are merged:
+ * cloud items carry `backend: true`, local ones do not. When the cloud is
+ * unreachable or the user is not signed in, we silently fall back to the
+ * local store only.
  */
 
 import { api, ApiError } from "@lynse/core/api/client";
@@ -246,6 +250,67 @@ export async function deleteCloudTodos(ids: string[]): Promise<void> {
 /** Clear every completed todo on the server. */
 export async function clearCloudCompleted(): Promise<void> {
   await api().post("/api/business/file/todo/clear", {});
+}
+
+// ── Cloud insert (manual adds sync to the backend) ─────────
+
+/** The subset of a manual todo the insert contract accepts (per lynse-cli
+ *  `todos add`: `todoContent` required, optional `expectedCompleteTime` /
+ *  `owner`, max 100 per request, server-side atomic). */
+export interface CloudTodoSeed {
+  title: string;
+  dueDate?: string;
+  owner?: string;
+}
+
+/** True when a cloud insert can be attempted — signed-in sessions only;
+ *  signed out, the local store stays the only home for manual adds. */
+export function canCreateCloudTodos(): boolean {
+  return getAuthStore()?.getState().isAuthenticated ?? false;
+}
+
+/** True when a todo carries metadata with no cloud field (evidence notes,
+ *  workbench source refs, calendar wiring) — those seeds stay local so an
+ *  insert never silently drops content. `sourceTitle` is display-only and
+ *  deliberately NOT blocking: syncing the todo beats keeping its label. */
+export function todoIsCloudRepresentable(todo: Partial<TodoItem>): boolean {
+  return (
+    !todo.notes &&
+    !todo.sourceRef &&
+    !todo.workbenchScope &&
+    !todo.calendarEventId
+  );
+}
+
+/** Batch-insert todos into the lynse.ai cloud (POST
+ *  `/api/business/file/todo/insert`, 1–100 items, server-atomic).
+ *  `syncStatus: 1` is sent explicitly so every insert lands as a
+ *  cloud-synced todo that `listall` returns on any device. Deadlines use
+ *  the contract's `yyyy-MM-dd HH:mm:ss`: a date-only value becomes local
+ *  midnight, which the server round-trips back to a bare date on read
+ *  (see mapCloudTodo / isLocalMidnight); unparseable values are dropped
+ *  rather than rejected wholesale. Throws on network/auth errors so
+ *  callers can fall back to the local store. */
+export async function createCloudTodos(items: CloudTodoSeed[]): Promise<void> {
+  const list = items
+    .map((item) => {
+      const content = item.title.trim();
+      if (!content) return null;
+      const entry: Record<string, unknown> = { todoContent: content, syncStatus: 1 };
+      const due = item.dueDate?.trim();
+      if (due) {
+        const time = /^\d{4}-\d{2}-\d{2}$/.test(due) ? `${due} 00:00:00` : toCloudTime(due);
+        if (time) entry.expectedCompleteTime = time;
+      }
+      const owner = item.owner?.trim();
+      if (owner) entry.owner = owner;
+      return entry;
+    })
+    .filter((entry): entry is Record<string, unknown> => entry !== null);
+  if (list.length === 0) return;
+  await api().post("/api/business/file/todo/insert", {
+    todoInsertList: list.slice(0, 100),
+  });
 }
 
 // ── Desktop local store bridge ────────────────────────────

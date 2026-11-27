@@ -14,7 +14,7 @@ import { openAboutWindow } from "../about/open-about";
 import { openFeatureRequests, openReportProblem } from "../diagnostics";
 import { reportProblemShortcutLabel } from "./report-problem-shortcut";
 import { openChangelog } from "../feedback/open-feedback";
-import { useUserCredits, useMembership, useUpdateNickname } from "./use-user-credits";
+import { useUserCredits, useMembership, useUpdateNickname, resolveCreditsBalance } from "./use-user-credits";
 import { UserActivityHeatmap } from "./user-activity-heatmap";
 import {
   DropdownMenu,
@@ -92,7 +92,7 @@ export function UserProfileDropdown({
   // The Agent 配置 console is served by the web deployment only.
   const webPlatform = isWebPlatform();
   const { data } = useUserCredits();
-  const { data: membership } = useMembership();
+  const { data: membership, isPending: membershipPending } = useMembership();
   const { theme, setTheme } = useTheme();
   const { update } = useAppUpdate();
   const updateNickname = useUpdateNickname();
@@ -101,11 +101,15 @@ export function UserProfileDropdown({
   const plan = useLocalizedPlan(membership?.memberLevel || data?.benefitType);
   const initials = nickname.slice(0, 2).toUpperCase();
 
-  // Remaining credits = total granted minus consumed (customer/current).
-  // Null while logged out / loading — the row then shows the plan only.
-  const pointsRemaining = data
-    ? Math.max(0, (data.pointsAmount ?? 0) - (data.usedPointsAmount ?? 0))
-    : null;
+  // Credits balance — minute-denominated wherever a membership quota exists
+  // (Credits ≡ transcription minutes); the legacy points fields on
+  // customer/current are the fallback (they are always 0 on the intl server).
+  const balance = resolveCreditsBalance(data, membership);
+  // While the membership query is pending, an all-points readout would flash
+  // 0 on intl accounts — hold the figure until the quota settles unless
+  // points alone already give a positive number.
+  const creditsPending =
+    Boolean(data) && membershipPending && !balance.minutesBased && balance.remaining === 0;
 
   // Version for the About row + the upgrade badge. Prefer the version the host
   // bridge injected at startup; fall back to the latest check's currentVersion.
@@ -214,13 +218,13 @@ export function UserProfileDropdown({
             <UserCircle className="size-4 text-muted-foreground" />
             <span className="text-sm">{plan}</span>
           </div>
-          {pointsRemaining !== null && (
+          {data && !creditsPending && (
             <span
               className="flex items-center gap-1 text-2xs tabular-nums text-muted-foreground"
               title={t("layout.credits")}
             >
               <Zap className="size-3 text-warning" />
-              {pointsRemaining}
+              {balance.remaining.toLocaleString()}
             </span>
           )}
         </div>

@@ -99,6 +99,33 @@ describe("recording card credentials fetch", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("uses same-origin lynse-agent-auth on www.lynse.cn and www.lynse.ai", async () => {
+    const originalLocation = window.location;
+    const cases: Array<[string, string]> = [
+      ["https://api.lynse.cn", "https://www.lynse.cn"],
+      ["https://api-en.lynse.ai", "https://www.lynse.ai"],
+    ];
+    for (const [apiBase, siteOrigin] of cases) {
+      resetRecordingCardConfigCache();
+      apiMock.baseUrl = apiBase;
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: { origin: siteOrigin },
+      });
+      const fetchMock = stubFetch(JSON.stringify({ password: "paired-key-123" }));
+      const config = await fetchRecordingCardConfig();
+      expect(config.password).toBe("paired-key-123");
+      const [url] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      expect(url).toBe(
+        `${siteOrigin}/platform/oauth/api/agent/device/recording-card/credential`,
+      );
+    }
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: originalLocation,
+    });
+  });
+
   it("fails fast without a session or agent address", async () => {
     const fetchMock = stubFetch("{}");
     apiMock.token = null;

@@ -6,12 +6,15 @@ import { useShallow } from "zustand/react/shallow";
 import { getAuthStore, useAuthStore } from "@lynse/core/auth";
 import {
   type TodoItem,
+  canCreateCloudTodos,
+  createCloudTodos,
   fetchTodos,
   saveTodo,
   deleteTodo,
   clearCloudCompleted,
   deleteCloudTodos,
   getLocalTodos,
+  todoIsCloudRepresentable,
 } from "./todo-api";
 
 function newLocalId(): string {
@@ -26,10 +29,9 @@ function nowIso(): string {
 
 /**
  * Shared todo store. Cloud items come from the lynse.ai backend (the same
- * API the lynse-cli skill wraps); manually added items live in the desktop's
- * local Rust store (`desktopAPI.todo` → `local-todos`). Todo add / toggle /
- * delete / clear are persisted to their respective store, so "refresh"
- * re-reads the real stores and "clear completed" actually removes the items.
+ * API the lynse-cli skill wraps); manual adds insert cloud-first when signed
+ * in and only land in the desktop's local Rust store (`desktopAPI.todo` →
+ * `local-todos`) as a fallback. Todo add / toggle /
  *
  * One module-level store instead of per-hook state, so every consumer —
  * home summary strip, home feed, global search, activity heatmap, todo
@@ -191,6 +193,22 @@ const useTodoStore = create<TodoStore>((set, get) => ({
       backend: false,
     };
     set((s) => ({ todos: [t, ...s.todos] })); // optimistic
+    // Cloud-first: a signed-in session inserts through the backend so the
+    // todo reaches every device; the forced reload then swaps the optimistic
+    // placeholder (local uuid) for the authoritative copy with its
+    // server-assigned id. Seeds carrying metadata the insert contract can't
+    // represent — and every failure — fall back to the local store.
+    if (canCreateCloudTodos() && todoIsCloudRepresentable({ ...extra, title })) {
+      try {
+        await createCloudTodos([
+          { title, dueDate: extra?.dueDate, owner: extra?.owner },
+        ]);
+        await get().load({ force: true });
+        return;
+      } catch (e) {
+        console.error("[Todo] cloud insert failed, keeping the todo local:", e);
+      }
+    }
     try {
       const saved = await saveTodo(t);
       set((s) => ({ todos: s.todos.map((x) => (x.id === t.id ? saved : x)) }));

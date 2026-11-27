@@ -758,7 +758,7 @@ const en = {
     account_minutes: "Transcription time",
     account_minutes_unlimited: "unlimited",
     account_booster: "Booster",
-    account_booster_hint: "Booster packs are separately purchased extra points, used only after your regular points run out.",
+    account_booster_hint: "Booster packs are separately purchased extra credits, already included in the remaining balance.",
     account_monthly_gift: "Gifted",
     account_monthly_gift_hint: "Cumulative points granted by monthly login rewards",
     account_points_history_hint: "Points purchases, consumption and refunds (newest first)",

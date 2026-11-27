@@ -36,6 +36,22 @@ interface RawConfig {
   productId?: number;
 }
 
+/** Site auth-gateway origin per business API origin (reuses lynse-agent-auth). */
+const API_HOST_TO_AGENT_AUTH_ORIGIN: Record<string, string> = {
+  "api.lynse.cn": "https://www.lynse.cn",
+  "gapp.lynse.cn": "https://www.lynse.cn",
+  "api-en.lynse.ai": "https://www.lynse.ai",
+};
+
+function agentAuthOriginForApi(apiBase: string): string | null {
+  try {
+    const host = new URL(apiBase).host;
+    return API_HOST_TO_AGENT_AUTH_ORIGIN[host] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 let cachedRequest: {
   apiBase: string;
   origin: string;
@@ -49,13 +65,18 @@ export async function fetchRecordingCardConfig(): Promise<RecordingCardConfig> {
   const agentBase = client.getAgentBaseUrl();
   const token = client.getToken();
   const apiBase = typeof client.getBaseUrl === "function" ? client.getBaseUrl() : "";
-  if (!agentBase) {
-    throw new Error("assistant service address is not ready");
-  }
   if (!token) {
     throw new Error("no signed-in session");
   }
-  const origin = new URL(agentBase).origin;
+  const siteOrigin = agentAuthOriginForApi(apiBase);
+  const sameOriginAuth =
+    typeof window !== "undefined" &&
+    siteOrigin !== null &&
+    window.location?.origin === siteOrigin;
+  if (!sameOriginAuth && !agentBase) {
+    throw new Error("assistant service address is not ready");
+  }
+  const origin = sameOriginAuth ? siteOrigin : new URL(agentBase!).origin;
   if (
     cachedRequest?.apiBase === apiBase &&
     cachedRequest?.origin === origin &&
@@ -68,10 +89,25 @@ export async function fetchRecordingCardConfig(): Promise<RecordingCardConfig> {
     origin,
     token,
     result: (async () => {
+      if (sameOriginAuth) {
+        try {
+          return await requestCredentialFromAgentAuth(siteOrigin, token);
+        } catch (err) {
+          if (!agentBase || err instanceof Error && (
+            err.message === "recording_card_account_required" ||
+            err.message === "recording_card_not_bound"
+          )) {
+            throw err;
+          }
+        }
+      }
+      if (!agentBase) {
+        throw new Error("assistant service address is not ready");
+      }
       if (typeof client.ensureAgentSession === "function") {
         await client.ensureAgentSession().catch(() => undefined);
       }
-      return requestConfig(origin, token);
+      return requestConfig(new URL(agentBase).origin, token);
     })(),
   };
   cachedRequest = request;
@@ -83,11 +119,7 @@ export async function fetchRecordingCardConfig(): Promise<RecordingCardConfig> {
   }
 }
 
-async function requestConfig(origin: string, token: string): Promise<RecordingCardConfig> {
-  const response = await fetch(`${origin}/api/desktop/recording-card/config`, {
-    headers: { Authorization: `Bearer ${token}` },
-    cache: "no-store",
-  });
+async function parseCredentialResponse(response: Response): Promise<RecordingCardConfig> {
   // Parse defensively: a gateway shell can answer with plain text (the raw
   // JSON.parse error shows an opaque token like `Unexpected token 'g'`),
   // surface the body head instead.
@@ -119,6 +151,23 @@ async function requestConfig(origin: string, token: string): Promise<RecordingCa
     result.productId = config.productId;
   }
   return result;
+}
+
+async function requestCredentialFromAgentAuth(origin: string, token: string): Promise<RecordingCardConfig> {
+  const response = await fetch(`${origin}/platform/oauth/api/agent/device/recording-card/credential`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+  return parseCredentialResponse(response);
+}
+
+async function requestConfig(origin: string, token: string): Promise<RecordingCardConfig> {
+  const response = await fetch(`${origin}/api/desktop/recording-card/config`, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+  return parseCredentialResponse(response);
 }
 
 /** Test hook: forget the cached config so the next fetch hits the API. */

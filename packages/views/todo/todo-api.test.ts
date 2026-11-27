@@ -1,5 +1,27 @@
-import { describe, expect, it } from "vitest";
-import { applySourceTitles, mapCloudTodo, noteTitleMapFromItems } from "./todo-api";
+import { describe, expect, it, vi } from "vitest";
+
+const { postMock, authState } = vi.hoisted(() => ({
+  postMock: vi.fn(async (_path: string, _body?: unknown) => ({})),
+  authState: { authenticated: true },
+}));
+
+vi.mock("@lynse/core/api/client", () => ({
+  ApiError: class ApiError extends Error {},
+  api: () => ({ post: postMock }),
+}));
+
+vi.mock("@lynse/core/auth", () => ({
+  getAuthStore: () => ({ getState: () => ({ isAuthenticated: authState.authenticated }) }),
+}));
+
+import {
+  applySourceTitles,
+  canCreateCloudTodos,
+  createCloudTodos,
+  mapCloudTodo,
+  noteTitleMapFromItems,
+  todoIsCloudRepresentable,
+} from "./todo-api";
 import type { TodoItem } from "./todo-api";
 import type { WorkspaceItem } from "../workspace/types";
 import { isLocalFileId } from "../workspace/local-transcription";
@@ -79,5 +101,67 @@ describe("applySourceTitles", () => {
     expect(items[0]!.sourceTitle).toBeUndefined();
     expect(items[1]!.sourceTitle).toBe("已有来源");
     expect(items[2]!.sourceTitle).toBeUndefined();
+  });
+});
+
+describe("createCloudTodos", () => {
+  it("maps title/dueDate/owner into the insert contract with syncStatus 1", async () => {
+    await createCloudTodos([
+      { title: "跟进登录页改版", dueDate: "2026-11-30", owner: "张三" },
+      { title: "   " },
+    ]);
+    expect(postMock).toHaveBeenCalledTimes(1);
+    expect(postMock).toHaveBeenCalledWith("/api/business/file/todo/insert", {
+      todoInsertList: [
+        {
+          todoContent: "跟进登录页改版",
+          expectedCompleteTime: "2026-11-30 00:00:00",
+          owner: "张三",
+          syncStatus: 1,
+        },
+      ],
+    });
+  });
+
+  it("formats full timestamps for the contract and drops unparseable deadlines", async () => {
+    await createCloudTodos([
+      { title: "写周报", dueDate: "2026-11-30T15:30:00.000Z" },
+      { title: "无期限", dueDate: "not-a-date" },
+    ]);
+    const list = (postMock.mock.lastCall![1] as { todoInsertList: Record<string, unknown>[] })
+      .todoInsertList;
+    expect(list[0]!.expectedCompleteTime).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    expect(list[1]!.expectedCompleteTime).toBeUndefined();
+  });
+
+  it("skips the request entirely when nothing survives the mapping", async () => {
+    postMock.mockClear();
+    await createCloudTodos([{ title: "   " }]);
+    expect(postMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("canCreateCloudTodos / todoIsCloudRepresentable", () => {
+  it("gates the insert on an authenticated session", () => {
+    authState.authenticated = true;
+    expect(canCreateCloudTodos()).toBe(true);
+    authState.authenticated = false;
+    expect(canCreateCloudTodos()).toBe(false);
+    authState.authenticated = true;
+  });
+
+  it("flags evidence notes and workbench/calendar wiring as local-only", () => {
+    expect(todoIsCloudRepresentable({ title: "跟进" })).toBe(true);
+    expect(todoIsCloudRepresentable({ title: "跟进", dueDate: "2026-11-30" })).toBe(true);
+    expect(
+      todoIsCloudRepresentable({ title: "跟进", notes: "证据行\n证据行" }),
+    ).toBe(false);
+    expect(
+      todoIsCloudRepresentable({
+        title: "跟进",
+        sourceRef: { kind: "file", id: "f1", revision: "r", quote: "q" },
+      }),
+    ).toBe(false);
+    expect(todoIsCloudRepresentable({ title: "跟进", calendarEventId: "cal-1" })).toBe(false);
   });
 });

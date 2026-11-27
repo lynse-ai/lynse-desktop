@@ -22,6 +22,16 @@ vi.mock("./todo-api", () => ({
   clearCloudCompleted: vi.fn(async () => {}),
   deleteCloudTodos: vi.fn(async () => {}),
   getLocalTodos: vi.fn(() => []),
+  canCreateCloudTodos: vi.fn(() => true),
+  createCloudTodos: vi.fn(async () => {}),
+  // Mirrors the real gate so the local-only fallback triggers on the same
+  // fields it would in the app.
+  todoIsCloudRepresentable: (todo: {
+    notes?: unknown;
+    sourceRef?: unknown;
+    workbenchScope?: unknown;
+    calendarEventId?: unknown;
+  }) => !todo.notes && !todo.sourceRef && !todo.workbenchScope && !todo.calendarEventId,
 }));
 
 vi.mock("@lynse/core/auth", () => ({
@@ -30,7 +40,7 @@ vi.mock("@lynse/core/auth", () => ({
   getAuthStore: () => ({ getState: () => ({ isAuthenticated: true }) }),
 }));
 
-import { fetchTodos, saveTodo } from "./todo-api";
+import { canCreateCloudTodos, createCloudTodos, fetchTodos, saveTodo } from "./todo-api";
 
 /** Stand-in for any page-level consumer (home page, home feed, todo page…):
  *  each mount used to hold its own isolated copy of the list. */
@@ -139,5 +149,55 @@ describe("useTodos shared store", () => {
     await act(async () => {});
     expect(vi.mocked(fetchTodos)).toHaveBeenCalledTimes(2);
     second.unmount();
+  });
+});
+
+describe("addLocal cloud-first routing", () => {
+  afterEach(() => {
+    vi.mocked(createCloudTodos).mockClear();
+    vi.mocked(canCreateCloudTodos).mockClear();
+  });
+
+  it("inserts through the cloud and reloads for the authoritative copy", async () => {
+    await act(async () => {
+      await useTodoStore.getState().addLocal("跟进合同评审", { dueDate: "2026-11-30" });
+    });
+    expect(vi.mocked(createCloudTodos)).toHaveBeenCalledWith([
+      { title: "跟进合同评审", dueDate: "2026-11-30", owner: undefined },
+    ]);
+    expect(vi.mocked(saveTodo)).not.toHaveBeenCalled();
+    // The forced reload replaced the optimistic placeholder with the
+    // server-side list (fetchTodos mock holds the authoritative copy).
+    expect(useTodoStore.getState().todos.map((t) => t.id)).toEqual(["t1"]);
+  });
+
+  it("falls back to the local store when the cloud insert fails", async () => {
+    vi.mocked(createCloudTodos).mockRejectedValueOnce(new Error("network down"));
+    await act(async () => {
+      await useTodoStore.getState().addLocal("离线也能记");
+    });
+    expect(vi.mocked(saveTodo)).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "离线也能记", backend: false }),
+    );
+    expect(useTodoStore.getState().todos.some((t) => t.title === "离线也能记")).toBe(true);
+  });
+
+  it("keeps seeds with cloud-unrepresentable metadata local", async () => {
+    await act(async () => {
+      await useTodoStore.getState().addLocal("带证据的待办", { notes: "证据行" });
+    });
+    expect(vi.mocked(createCloudTodos)).not.toHaveBeenCalled();
+    expect(vi.mocked(saveTodo)).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "带证据的待办" }),
+    );
+  });
+
+  it("skips the cloud path entirely when signed out", async () => {
+    vi.mocked(canCreateCloudTodos).mockReturnValueOnce(false);
+    await act(async () => {
+      await useTodoStore.getState().addLocal("未登录手动添加");
+    });
+    expect(vi.mocked(createCloudTodos)).not.toHaveBeenCalled();
+    expect(vi.mocked(saveTodo)).toHaveBeenCalled();
   });
 });

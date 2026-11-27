@@ -71,36 +71,17 @@ function unpackLogRows(data: unknown): PointsLogEntry[] {
   return o.data ?? o.rows ?? o.list ?? [];
 }
 
-/** The 加油包 (booster) is a separate bucket the server only spends once the
- *  regular points are exhausted, yet customer/current exposes no balance for
- *  it — the only machine-readable trace is the points log itself:
- *  purchases are changeType 0 rows ("充电包充值…"), booster consumption rows
- *  mention 加油包/充电包/新积分 in pointsDetails. Balance = purchased − used. */
-function isBoosterPurchase(row: PointsLogEntry): boolean {
-  return row.changeType === 0 && row.operationType !== "-";
-}
-function isBoosterConsumption(row: PointsLogEntry): boolean {
-  if (row.operationType !== "-") return false;
-  const detail = typeof row.pointsDetails === "string" ? row.pointsDetails : "";
-  return /加油包|充电包|新积分/.test(detail);
-}
-
 export interface PointsLedger {
   /** Newest-first rows from page 1 (for the recent-activity list). */
   recent: PointsLogEntry[];
-  /** 加油包 remaining, computed from the full log; null while loading. */
-  boosterRemaining: number | null;
-  /** Total 加油包 points ever purchased. */
-  boosterPurchased: number;
-  /** Cumulative monthly-login-reward points ever granted (changeType 7). */
-  monthlyGiftTotal: number;
 }
 
 /**
- * Personal points ledger: the recent rows for the activity list plus the
- * booster-pack balance derived by walking the whole log (bounded — see
- * maxPages; accounts older/larger than the cap get a slightly understated
- * booster balance rather than an error).
+ * Personal points ledger: the recent rows backing the points-history dialog.
+ * Balances are NOT derived from the log — customer/current and
+ * membership/refresh already expose them as structured fields (see
+ * resolveCreditsBalance); walking log text with heuristics double-counted
+ * booster packs on both servers.
  */
 export function usePointsLedger(recentCount = 50, pageSize = 100, maxPages = 10) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -118,30 +99,54 @@ export function usePointsLedger(recentCount = 50, pageSize = 100, maxPages = 10)
         all.push(...batch);
         if (batch.length < pageSize) break;
       }
-      let boosterRemaining = 0;
-      let boosterPurchased = 0;
-      let monthlyGiftTotal = 0;
-      for (const row of all) {
-        if (isBoosterPurchase(row)) {
-          boosterPurchased += Number(row.pointsAmount) || 0;
-          boosterRemaining += Number(row.pointsAmount) || 0;
-        } else if (isBoosterConsumption(row)) {
-          boosterRemaining -= Number(row.pointsAmount) || 0;
-        }
-        if (row.changeType === 7 && row.operationType !== "-") {
-          monthlyGiftTotal += Number(row.pointsAmount) || 0;
-        }
-      }
-      return {
-        recent: all.slice(0, recentCount),
-        boosterRemaining: Math.max(0, boosterRemaining),
-        boosterPurchased,
-        monthlyGiftTotal,
-      };
+      return { recent: all.slice(0, recentCount) };
     },
     enabled: isAuthenticated,
     staleTime: 60_000,
   });
+}
+
+/** The credits balance as one resolved figure. Credits and transcription
+ *  minutes are the same currency (user decision 2026-11-27): the membership
+ *  quota is authoritative wherever it exists, and the legacy points fields on
+ *  customer/current (always 0 on the intl server) are only a fallback for
+ *  accounts without any minute quota. */
+export interface CreditsBalance {
+  remaining: number;
+  /** Quota total, null when the server exposes no total — the row then omits
+   *  the "/ total" suffix and the progress bar. */
+  total: number | null;
+  /** Remaining minutes in separately purchased packs (时长包), shown as a
+   *  chip; already included in `remaining`. */
+  packRemaining: number;
+  /** True when the balance comes from the membership minute quota rather
+   *  than legacy points — the account card hides its separate minutes row in
+   *  that case (same numbers twice). */
+  minutesBased: boolean;
+}
+
+export function resolveCreditsBalance(
+  credits?: CustomerInfo | null,
+  membership?: MembershipQuota | null,
+): CreditsBalance {
+  const allRemaining = membership?.allRemainingMinutes ?? membership?.remainingMinutes;
+  if (typeof allRemaining === "number") {
+    const total = typeof membership?.totalMinutes === "number" ? membership!.totalMinutes : null;
+    return {
+      remaining: Math.max(0, allRemaining),
+      total,
+      packRemaining: Math.max(0, membership?.paidPackageRemainingMinutes ?? 0),
+      minutesBased: true,
+    };
+  }
+  const pointsTotal = credits?.pointsAmount ?? 0;
+  const used = credits?.usedPointsAmount ?? 0;
+  return {
+    remaining: Math.max(0, pointsTotal - used),
+    total: pointsTotal > 0 ? pointsTotal : null,
+    packRemaining: 0,
+    minutesBased: false,
+  };
 }
 
 export function useUserCredits() {

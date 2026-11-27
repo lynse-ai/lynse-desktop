@@ -202,18 +202,39 @@ impl CardDevice {
         );
 
         #[cfg(not(target_os = "windows"))]
-        device.set_configuration(configuration).await?;
-        let interface = device.claim_interface(interface_number).await?;
+        if let Err(err) = device.set_configuration(configuration).await {
+            log::warn!("[recording-card] set_configuration({configuration}) failed: {err}");
+            return Err(DeviceError::from(err));
+        }
+        let interface = match device.claim_interface(interface_number).await {
+            Ok(interface) => interface,
+            Err(err) => {
+                log::warn!("[recording-card] claim_interface({interface_number}) failed: {err}");
+                return Err(DeviceError::from(err));
+            }
+        };
         let bulk_out = interface
             .endpoint::<Bulk, Out>(bulk_out_address)
-            .map_err(|e| DeviceError::Usb(e.to_string()))?;
-        let bulk_in = interface
+            .map_err(|e| {
+                log::warn!("[recording-card] open bulk OUT 0x{bulk_out_address:02x} failed: {e}");
+                DeviceError::Usb(e.to_string())
+            })?;
+        let mut bulk_in = interface
             .endpoint::<Bulk, In>(bulk_in_address)
-            .map_err(|e| DeviceError::Usb(e.to_string()))?;
+            .map_err(|e| {
+                log::warn!("[recording-card] open bulk IN 0x{bulk_in_address:02x} failed: {e}");
+                DeviceError::Usb(e.to_string())
+            })?;
+
+        // Drain any startup bulk-IN frames before the control handshake on
+        // non-Windows hosts; keep the timeout short so idle devices connect
+        // immediately while stale startup noise is cleared.
+        #[cfg(not(target_os = "windows"))]
+        Self::drain_quiet(&mut bulk_in).await;
 
         // WinUSB validates the interface number in wIndex.
         let interface_index = u16::from(interface_number);
-        interface
+        if let Err(err) = interface
             .control_out(
                 ControlOut {
                     control_type: ControlType::Standard,
@@ -225,9 +246,13 @@ impl CardDevice {
                 },
                 IO_TIMEOUT,
             )
-            .await?;
+            .await
+        {
+            log::warn!("[recording-card] control_out(0x{CONTROL_REQUEST_OUT:02x}) failed: {err}");
+            return Err(DeviceError::from(err));
+        }
 
-        let result = interface
+        let result = match interface
             .control_in(
                 ControlIn {
                     control_type: ControlType::Standard,
@@ -239,9 +264,19 @@ impl CardDevice {
                 },
                 IO_TIMEOUT,
             )
-            .await?;
+            .await
+        {
+            Ok(result) => result,
+            Err(err) => {
+                log::warn!("[recording-card] control_in(0x{CONTROL_REQUEST_IN:02x}) failed: {err}");
+                return Err(DeviceError::from(err));
+            }
+        };
 
         if result.first() != Some(&0x01) {
+            log::warn!(
+                "[recording-card] password handshake rejected by device (ctrl_in={result:?})"
+            );
             return Err(DeviceError::Auth(
                 "口令校验失败，已断开连接".to_string(),
             ));
@@ -257,6 +292,26 @@ impl CardDevice {
             bulk_in: Mutex::new(bulk_in),
             pending: Mutex::new(Vec::new()),
         })
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    async fn drain_quiet(ep: &mut Endpoint<Bulk, In>) {
+        // Best-effort short read of startup frames; a timeout here is normal
+        // and must not fail the connection.
+        ep.submit(Buffer::new(ep.max_packet_size()));
+        match tokio::time::timeout(Duration::from_millis(200), ep.next_complete()).await {
+            Ok(completion) => match completion.into_result() {
+                Ok(buf) => log::info!(
+                    "[recording-card] drained {} startup bulk bytes",
+                    buf.len()
+                ),
+                Err(error) => log::debug!("[recording-card] startup bulk read failed: {error}"),
+            },
+            Err(_) => {
+                ep.cancel_all();
+                let _ = ep.next_complete().await.into_result();
+            }
+        }
     }
 
     pub fn is_authenticated(&self) -> bool {

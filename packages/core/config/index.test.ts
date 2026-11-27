@@ -51,6 +51,42 @@ describe("edition resolution & persistence", () => {
   });
 });
 
+describe("timezone-first default detection", () => {
+  /** Swap in a deterministic timezone + navigator language for detection. */
+  function stubEnvironment(timeZone: string | undefined, language: string) {
+    // Plain function, not a class: core/config invokes Intl.DateTimeFormat()
+    // bare (no `new`), which would throw on a class constructor.
+    const FakeDateTimeFormat = function () {
+      return {
+        resolvedOptions: () => ({ timeZone }) as Intl.ResolvedDateTimeFormatOptions,
+      };
+    } as unknown as typeof Intl.DateTimeFormat;
+    vi.stubGlobal("Intl", { ...Intl, DateTimeFormat: FakeDateTimeFormat });
+    vi.stubGlobal("navigator", { language });
+  }
+
+  it("maps China-region timezones to cn", () => {
+    stubEnvironment("Asia/Shanghai", "en-US");
+    expect(detectDefaultEdition()).toBe("cn");
+    stubEnvironment("Asia/Hong_Kong", "en-US");
+    expect(detectDefaultEdition()).toBe("cn");
+  });
+
+  it("maps every other resolvable timezone to intl, even for zh speakers", () => {
+    // The timezone is authoritative (user decision, 2026-11-26): language no
+    // longer overrides it.
+    stubEnvironment("America/Los_Angeles", "zh-CN");
+    expect(detectDefaultEdition()).toBe("intl");
+    stubEnvironment("Asia/Tokyo", "zh-CN");
+    expect(detectDefaultEdition()).toBe("intl");
+  });
+
+  it("falls back to the navigator language only when no timezone is available", () => {
+    stubEnvironment(undefined, "zh-CN");
+    expect(detectDefaultEdition()).toBe("cn");
+  });
+});
+
 describe("edition → gateway mapping", () => {
   it("sends each packaged edition to its own production account system", () => {
     // The two editions are separate account systems; DEFAULT_API_URL falls

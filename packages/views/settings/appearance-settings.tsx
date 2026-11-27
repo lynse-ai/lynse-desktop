@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from "@lynse/ui/components/ui/select";
 import { useTheme } from "@lynse/ui/components/common/theme-provider";
+import { getSavedLocale } from "@lynse/core/i18n";
 import { useTranslation, changeLanguage } from "@lynse/core/i18n/react";
 import { cn } from "@lynse/ui/lib/utils";
 import { Copy, Download } from "../icons";
@@ -228,7 +229,7 @@ function groupLabelKey(id: AppThemeGroupId): string {
 
 export function AppearanceSection() {
   const { theme, setTheme, resolvedTheme } = useTheme();
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const [state, setState] = useState<AppThemeState>(() => getAppThemeState());
   const mode = resolvedTheme === "dark" ? "dark" : "light";
 
@@ -266,7 +267,7 @@ export function AppearanceSection() {
             </div>
             <div className="w-[min(21rem,54%)] flex justify-end">
               <Select
-                value={i18n?.language ?? "en"}
+                value={getSavedLocale() ?? "auto"}
                 onValueChange={(code) => {
                   if (code) void changeLanguage(code);
                 }}
@@ -275,6 +276,7 @@ export function AppearanceSection() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="auto">{t("layout.lang_auto")}</SelectItem>
                   <SelectItem value="en">{t("layout.lang_en")}</SelectItem>
                   <SelectItem value="zh-Hans">{t("layout.lang_zh")}</SelectItem>
                   <SelectItem value="zh-Hant">{t("layout.lang_zh_hant")}</SelectItem>

@@ -7,8 +7,7 @@ import { ApiClient, setApiInstance, setApiTransportMode } from "@lynse/core/api/
 import { createAuthStore, registerAuthStore } from "@lynse/core/auth";
 import { getDesktopAppApi } from "../app-update";
 import { LoginPage } from "./login-page";
-import { configureBuildChannel } from "../feature-flags";
-import { changeLanguage } from "@lynse/core/i18n/react";
+import { configureBuildChannel, hasDevApiAuth, isTestMode } from "../feature-flags";
 
 vi.mock("@lynse/core/i18n/react", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -20,8 +19,8 @@ vi.mock("../layout/app-title-bar", () => ({ WindowControls: () => null, showWind
 vi.mock("./api-auth-panel", () => ({ ApiAuthPanel: () => null }));
 vi.mock("../feature-flags", async () => ({
   ...await vi.importActual<typeof import("../feature-flags")>("../feature-flags"),
-  hasDevApiAuth: () => false,
-  isTestMode: () => false,
+  hasDevApiAuth: vi.fn(() => false),
+  isTestMode: vi.fn(() => false),
   setTestMode: vi.fn(),
 }));
 
@@ -72,6 +71,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
   setApiTransportMode("proxy");
   configureBuildChannel("official");
+  vi.mocked(hasDevApiAuth).mockReturnValue(false);
+  vi.mocked(isTestMode).mockReturnValue(false);
 });
 
 async function start() {
@@ -336,7 +337,7 @@ describe("desktop Apple sign-in", () => {
     expect(closeAuthWindow).toHaveBeenCalled();
   });
 
-  it("replaces desktop intl OAuth buttons with the waiting notice in-place so bottom text stays visible", async () => {
+  it("replaces desktop intl OAuth buttons with the waiting notice in-place", async () => {
     localStorage.setItem("lynse_edition", "intl");
     const googleOpen = vi.fn(async () => {});
     const googleClose = vi.fn(async () => {});
@@ -355,19 +356,15 @@ describe("desktop Apple sign-in", () => {
 
     try {
       render(<LoginPage />);
-      const googleBtn = screen.getByTestId("google-login");
-      const siteSwitcher = screen.getByLabelText("auth.server_region");
-      fireEvent.click(googleBtn);
+      fireEvent.click(screen.getByTestId("google-login"));
 
       await waitFor(() => expect(googleOpen).toHaveBeenCalledTimes(1));
-      const waiting = screen.getByTestId("oauth-waiting");
       expect(screen.getByText("auth.google_waiting")).toBeTruthy();
       expect(screen.getByText("auth.sso_waiting_hint")).toBeTruthy();
       expect(screen.getByRole("button", { name: "auth.wechat_cancel" })).toBeTruthy();
+      // Waiting notice replaces the OAuth buttons instead of stacking below them.
       expect(screen.getAllByTestId("oauth-waiting")).toHaveLength(1);
-      // Waiting notice replaces the OAuth buttons above the site switcher instead of pushing past it.
       expect(screen.queryByTestId("google-login")).toBeNull();
-      expect(waiting.compareDocumentPosition(siteSwitcher)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
 
       fireEvent.click(screen.getByRole("button", { name: "auth.wechat_cancel" }));
       expect(googleClose).toHaveBeenCalledTimes(1);
@@ -378,30 +375,26 @@ describe("desktop Apple sign-in", () => {
     }
   });
 
-  it("renders server region switcher and allows switching between CN and Global editions", async () => {
+  it("keeps the region switcher out of the regular sign-in views", () => {
     localStorage.clear();
     render(<LoginPage />);
-    const trigger = screen.getByLabelText("auth.server_region");
-    expect(trigger).toBeTruthy();
+    // The site selection lives inside the API panel now (api-auth-panel).
+    expect(screen.queryByTestId("api-server-select")).toBeNull();
+    expect(screen.queryByLabelText("auth.server_region")).toBeNull();
+    localStorage.removeItem("lynse_edition");
+  });
 
-    // Click trigger to open dropdown, then switch to intl
-    fireEvent.click(trigger);
-    fireEvent.click(screen.getByText("auth.region_intl"));
-    await waitFor(() => {
-      expect(localStorage.getItem("lynse_edition")).toBe("intl");
-      expect(localStorage.getItem("lynse_api_url")).toBe("https://api-en.lynse.ai");
-      expect(screen.getByPlaceholderText("auth.email_placeholder")).toBeTruthy();
-    });
-
-    // Click trigger again, then switch back to cn
-    fireEvent.click(screen.getByLabelText("auth.server_region"));
-    fireEvent.click(screen.getByText("auth.region_cn"));
-    await waitFor(() => {
-      expect(localStorage.getItem("lynse_edition")).toBe("cn");
-      expect(localStorage.getItem("lynse_api_url")).toBe("https://api.lynse.cn");
-      expect(screen.getByPlaceholderText("auth.sms_phone_placeholder")).toBeTruthy();
-      expect(changeLanguage).toHaveBeenCalledWith("zh-Hans");
-    });
+  it("returns from secondary screens via the bottom back arrow instead of a text button", () => {
+    localStorage.setItem("lynse_edition", "cn");
+    render(<LoginPage />);
+    fireEvent.click(screen.getByRole("button", { name: "auth.more_login" }));
+    // The old "sign in with phone" text button is gone; the back arrow sits
+    // under the view content.
+    expect(screen.queryByText("auth.back_to_phone")).toBeNull();
+    expect(screen.getByRole("button", { name: "auth.back_home" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "auth.back_home" }));
+    expect(screen.getByPlaceholderText("auth.sms_phone_placeholder")).toBeTruthy();
+    localStorage.removeItem("lynse_edition");
   });
 
   describe("progressive single-input (Muse style) flow", () => {

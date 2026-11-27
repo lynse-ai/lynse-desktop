@@ -138,25 +138,43 @@ impl RecordingCardSession {
         self.ensure_current(generation).await?;
 
         // If a password was not provided (normal secure flow), fetch it natively
-        // via Certificate-Pinned HTTPS directly from the auth gateway.
-        // The credential is held in a Zeroizing wrapper, ensuring the password
-        // memory is securely wiped when dropped.
-        let (pwd_holder, vid, pid) = match password {
+        // directly from the auth gateway (with fallback to the site OAuth
+        // credential route). The credential is held in a Zeroizing wrapper,
+        // ensuring the password memory is securely wiped when dropped.
+        let (pwd_holder, vid, pid, allow_credential_fallback) = match password {
             Some(p) if !p.trim().is_empty() => (
                 zeroize::Zeroizing::new(p.to_string()),
                 vendor_id.unwrap_or(DEFAULT_VENDOR_ID),
                 product_id.unwrap_or(DEFAULT_PRODUCT_ID),
+                false,
             ),
             _ => {
                 let creds = account.fetch_credential(access, vendor_id, product_id).await?;
                 let vid = vendor_id.unwrap_or(creds.vendor_id);
                 let pid = product_id.unwrap_or(creds.product_id);
-                (creds.password, vid, pid)
+                (creds.password, vid, pid, true)
             }
         };
 
         let info = find_device(vid, pid).await?;
-        let device = Arc::new(CardDevice::open_and_authenticate(&info, pwd_holder.as_str()).await?);
+        let device = match CardDevice::open_and_authenticate(&info, pwd_holder.as_str()).await {
+            Ok(device) => Arc::new(device),
+            Err(DeviceError::Auth(auth_err)) if allow_credential_fallback => {
+                match account.fetch_fallback_credential(access, vendor_id, product_id).await {
+                    Ok(fallback) if fallback.password.as_str() != pwd_holder.as_str() => {
+                        log::warn!(
+                            "[recording-card] retrying USB handshake with site fallback credential"
+                        );
+                        Arc::new(
+                            CardDevice::open_and_authenticate(&info, fallback.password.as_str())
+                                .await?,
+                        )
+                    }
+                    _ => return Err(SessionError::Device(DeviceError::Auth(auth_err))),
+                }
+            }
+            Err(err) => return Err(SessionError::Device(err)),
+        };
         drop(pwd_holder);
         let identity = Self::query_identity(&device).await?;
         account.verify(access, &identity).await?;
@@ -749,7 +767,10 @@ pub async fn recording_card_usb_connect(
             &access,
         )
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| {
+            log::warn!("[recording-card] connect failed: {e}");
+            e.to_string()
+        })
 }
 
 #[tauri::command(async)]

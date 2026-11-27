@@ -60,18 +60,20 @@ export function selectReleaseNotes(notes: unknown, localized: unknown, language:
 }
 
 /**
- * Best-effort detection of the system's preferred language from the
- * navigator's ordered language list. Falls back to DEFAULT_LOCALE when the
- * environment exposes no languages or none of them is supported.
+ * Read the first supported language from the system's ordered preferences.
  */
-export function detectSystemLocale(): SupportedLocale {
-  if (typeof navigator === "undefined") return DEFAULT_LOCALE;
-  const candidates = navigator.languages ?? [navigator.language];
+function matchSystemLocale(): SupportedLocale | null {
+  if (typeof navigator === "undefined") return null;
+  const candidates = navigator.languages?.length ? navigator.languages : [navigator.language];
   for (const tag of candidates) {
     const match = tag ? matchLocale(tag) : null;
     if (match) return match;
   }
-  return DEFAULT_LOCALE;
+  return null;
+}
+
+export function detectSystemLocale(): SupportedLocale {
+  return matchSystemLocale() ?? DEFAULT_LOCALE;
 }
 
 /**
@@ -84,17 +86,33 @@ function syncDocumentLang(locale: string) {
   }
 }
 
-/**
- * Determine the initial locale with the following precedence:
- * 1. URL search parameter (?lng=, ?lang=, ?locale=)
- * 2. Caller-supplied locale option
- * 3. Persisted user choice in localStorage (app key "lynse_locale", marketing key "lynse-lang", or "lynse_lang")
- * 4. In international edition (LYNSE_EDITION === "intl" or hostname ending with ".ai"):
- *    Default to "en" (or "ja"/"ko" if user's system language explicitly starts with those),
- *    matching the international marketing site on www.lynse.ai which defaults to English.
- * 5. Best-effort system language detection
- */
-export function getInitialLocale(optsLocale?: string): SupportedLocale {
+export function getSavedLocale(): SupportedLocale | null {
+  if (typeof window === "undefined") return null;
+  try {
+    for (const key of LOCALE_STORAGE_KEYS) {
+      const locale = matchLocale(localStorage.getItem(key) ?? "");
+      if (locale) return locale;
+    }
+  } catch {}
+  return null;
+}
+
+function localeForHost(hostname: string): SupportedLocale | null {
+  if (hostname === "lynse.ai" || hostname.endsWith(".lynse.ai")) return "en";
+  if (hostname === "lynse.cn" || hostname.endsWith(".lynse.cn")) return "zh-Hans";
+  return null;
+}
+
+function localeForApiUrl(apiBaseUrl: string): SupportedLocale | null {
+  try {
+    const url = new URL(apiBaseUrl);
+    if (url.protocol === "https:" || url.protocol === "http:") return localeForHost(url.hostname);
+  } catch {}
+  return null;
+}
+
+/** Resolve the application language and the default language sent to chat. */
+export function getInitialLocale(optsLocale?: string, apiBaseUrl?: string): SupportedLocale {
   // 1. URL search params (e.g. ?lng=en, ?lang=en, ?locale=en)
   if (typeof window !== "undefined" && window.location?.search) {
     try {
@@ -113,43 +131,46 @@ export function getInitialLocale(optsLocale?: string): SupportedLocale {
     if (matched) return matched;
   }
 
-  // 3. Persisted choice in localStorage (supports app and marketing website keys)
-  if (typeof window !== "undefined") {
+  const saved = getSavedLocale();
+  if (saved) return saved;
+
+  // Auxiliary windows without an API client can still use the saved gateway.
+  let savedApiUrl: string | null = null;
+  if (apiBaseUrl === undefined && typeof window !== "undefined") {
     try {
-      for (const key of LOCALE_STORAGE_KEYS) {
-        const stored = localStorage.getItem(key);
-        if (stored) {
-          const matched = matchLocale(stored);
-          if (matched) return matched;
-        }
-      }
+      savedApiUrl = localStorage.getItem("lynse_api_url");
     } catch {}
   }
+  const selectedApiUrl = apiBaseUrl || savedApiUrl;
+  const editionLocale = getEffectiveEdition() === "intl" ? DEFAULT_LOCALE : "zh-Hans";
+  const serverLocale = selectedApiUrl
+    ? localeForApiUrl(selectedApiUrl)
+    : localeForHost(typeof window === "undefined" ? "" : window.location?.hostname ?? "") ?? editionLocale;
+  const systemLocale = matchSystemLocale();
 
-  // 4. In international edition (getEffectiveEdition() === "intl" or host ends with .ai):
-  // Global site defaults to English, unless system language explicitly matches ja or ko.
-  const isIntlEdition =
-    getEffectiveEdition() === "intl" ||
-    (typeof window !== "undefined" &&
-      (window.location?.hostname === "lynse.ai" ||
-        window.location?.hostname?.endsWith(".lynse.ai") ||
-        window.location?.hostname?.endsWith(".ai")));
-
-  if (isIntlEdition) {
-    if (typeof navigator !== "undefined") {
-      const candidates = navigator.languages ?? [navigator.language];
-      for (const tag of candidates) {
-        if (!tag) continue;
-        const lower = tag.toLowerCase();
-        if (lower.startsWith("ja")) return "ja";
-        if (lower.startsWith("ko")) return "ko";
-      }
+  // English system preferences work on either gateway. For a Chinese system
+  // with the international gateway selected, default to English.
+  if (systemLocale) {
+    if (serverLocale === "en" && (systemLocale === "zh-Hans" || systemLocale === "zh-Hant")) {
+      return serverLocale;
     }
-    return DEFAULT_LOCALE;
+    return systemLocale;
   }
+  return serverLocale ?? editionLocale;
+}
 
-  // 5. Fallback: system language detection
-  return detectSystemLocale();
+let initialLocale: string | undefined;
+let activeApiBaseUrl: string | undefined;
+
+export async function refreshLocale(): Promise<void> {
+  if (i18next.isInitialized) {
+    await i18next.changeLanguage(getInitialLocale(initialLocale, activeApiBaseUrl));
+  }
+}
+
+export function setLocaleApiBaseUrl(apiBaseUrl: string): void {
+  activeApiBaseUrl = apiBaseUrl;
+  void refreshLocale();
 }
 
 /**
@@ -158,36 +179,26 @@ export function getInitialLocale(optsLocale?: string): SupportedLocale {
  */
 export function initI18n(opts: {
   locale?: string;
+  apiBaseUrl?: string;
   resources?: Record<string, Record<string, unknown>>;
 }) {
   if (i18next.isInitialized) return;
 
-  const lng = getInitialLocale(opts.locale);
+  initialLocale = opts.locale;
+  activeApiBaseUrl = opts.apiBaseUrl;
+  const lng = getInitialLocale(initialLocale, activeApiBaseUrl);
 
-  // Sync to localStorage keys so both the app and the marketing site are aligned
+  // Persist only manual choices so automatic defaults can follow changes.
   if (typeof window !== "undefined") {
-    try {
-      for (const key of LOCALE_STORAGE_KEYS) {
-        if (!localStorage.getItem(key)) {
-          localStorage.setItem(key, lng);
-        }
+    window.addEventListener("languagechange", () => { void refreshLocale(); });
+    window.addEventListener("storage", (event) => {
+      if (event.key === null || LOCALE_STORAGE_KEYS.some((key) => key === event.key)) {
+        void refreshLocale();
       }
-    } catch {}
-
-    // Listen for storage changes from other tabs or the marketing site
-    try {
-      window.addEventListener("storage", (e) => {
-        if (e.key && (LOCALE_STORAGE_KEYS as readonly string[]).includes(e.key) && e.newValue) {
-          const matched = matchLocale(e.newValue);
-          if (matched && matched !== i18next.language) {
-            void i18next.changeLanguage(matched);
-            syncDocumentLang(matched);
-          }
-        }
-      });
-    } catch {}
+    });
   }
 
+  i18next.on("languageChanged", syncDocumentLang);
   i18next.use(initReactI18next).init({
     lng,
     fallbackLng: DEFAULT_LOCALE,

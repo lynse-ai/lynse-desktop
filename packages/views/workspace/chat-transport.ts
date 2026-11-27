@@ -1,3 +1,5 @@
+import i18next from "i18next";
+import { matchLocale } from "@lynse/core/i18n";
 import type { DesktopContext } from "../workbench/types";
 import type {
   ChatProvider,
@@ -210,6 +212,8 @@ function hydrateDesktopContext(opts: SendChatOptions): Promise<void> | undefined
 function chatTurnBody(opts: SendChatOptions): Record<string, unknown> {
   const { query, sessionId, fileIds, userSpecifiedFile, token, confirmToken, modelOverride } = opts;
   const body: Record<string, unknown> = { query };
+  const language = matchLocale(i18next.resolvedLanguage ?? i18next.language ?? "");
+  if (language) body.language = language;
   if (opts.requestId) body.requestId = opts.requestId;
   if (sessionId) body.sessionId = sessionId;
   if (token) body.token = token;

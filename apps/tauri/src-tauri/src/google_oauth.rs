@@ -31,7 +31,8 @@ use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 use tokio::net::TcpListener;
 
@@ -87,22 +88,26 @@ pub(crate) async fn google_oauth_start(app: AppHandle) -> CommandResult<u16> {
 
     let app_for_task = app.clone();
     let handle = tauri::async_runtime::spawn(async move {
+        let received_outcome = Arc::new(AtomicBool::new(false));
         loop {
             let Ok((stream, _)) = listener.accept().await else {
                 break;
             };
             let app = app_for_task.clone();
-            // Sequential handling is fine: Google opens exactly one redirect
-            // (the response carries `Connection: close`, so each connection
-            // resolves after one exchange).
-            let service = service_fn(move |request| handle_redirect(app.clone(), request));
+            let outcome = received_outcome.clone();
+            // Sequential handling is fine: each connection closes immediately
+            // (`Connection: close`). Only exit once an actual code/error
+            // callback arrives so browser preconnects or /favicon.ico probes
+            // cannot kill the listener prematurely.
+            let service = service_fn(move |request| {
+                handle_redirect(app.clone(), outcome.clone(), request)
+            });
             let _ = http1::Builder::new()
                 .serve_connection(TokioIo::new(stream), service)
                 .await;
-            // One outcome answered — the listener's job is done (the renderer
-            // stops us explicitly on cancel; a stale finished handle is
-            // harmless to replace).
-            break;
+            if received_outcome.load(Ordering::Acquire) {
+                break;
+            }
         }
     });
     if let Ok(mut guard) = LISTENER.lock() {
@@ -119,8 +124,13 @@ pub(crate) fn google_oauth_stop() -> CommandResult<()> {
     Ok(())
 }
 
+fn is_callback_query(query: &str) -> bool {
+    query.contains("code=") || query.contains("error=")
+}
+
 async fn handle_redirect(
     app: AppHandle,
+    received_outcome: Arc<AtomicBool>,
     request: Request<Incoming>,
 ) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
     // Google redirects to the redirect_uri root with the outcome in the
@@ -128,7 +138,8 @@ async fn handle_redirect(
     // landing page without emitting a bogus callback.
     let url = request.uri().to_string();
     let query = request.uri().query().unwrap_or_default();
-    if query.contains("code=") || query.contains("error=") {
+    if is_callback_query(query) {
+        received_outcome.store(true, Ordering::Release);
         log::info!("[google-oauth] redirect received");
         let _ = app.emit(CALLBACK_EVENT, format!("http://127.0.0.1{url}"));
     }
@@ -342,6 +353,72 @@ mod tests {
             )
         );
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn listener_ignores_non_callback_requests_until_code_arrives() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let relayed = std::sync::Arc::new(Mutex::new(None::<String>));
+        let sink = relayed.clone();
+        let server = tokio::spawn(async move {
+            let received_outcome = Arc::new(AtomicBool::new(false));
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let sink = sink.clone();
+                let outcome = received_outcome.clone();
+                let service = service_fn(move |request: Request<Incoming>| {
+                    let sink = sink.clone();
+                    let outcome = outcome.clone();
+                    async move {
+                        let url = request.uri().to_string();
+                        let query = request.uri().query().unwrap_or_default();
+                        if is_callback_query(query) {
+                            outcome.store(true, Ordering::Release);
+                            *sink.lock().unwrap() = Some(format!("http://127.0.0.1{url}"));
+                        }
+                        let mut response =
+                            Response::new(Full::new(Bytes::from_static(LANDING_HTML.as_bytes())));
+                        response
+                            .headers_mut()
+                            .insert(CONTENT_TYPE, "text/html; charset=utf-8".parse().unwrap());
+                        response
+                            .headers_mut()
+                            .insert(CONNECTION, "close".parse().unwrap());
+                        Ok::<_, std::convert::Infallible>(response)
+                    }
+                });
+                let _ = http1::Builder::new()
+                    .serve_connection(TokioIo::new(stream), service)
+                    .await;
+                if received_outcome.load(Ordering::Acquire) {
+                    break;
+                }
+            }
+        });
+
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let favicon_resp = client
+            .get(format!("http://127.0.0.1:{port}/favicon.ico"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(favicon_resp.status(), StatusCode::OK);
+        assert!(relayed.lock().unwrap().is_none());
+
+        let code_resp = client
+            .get(format!("http://127.0.0.1:{port}/?state=st2&code=xyz"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(code_resp.status(), StatusCode::OK);
+        assert_eq!(
+            relayed.lock().unwrap().as_deref(),
+            Some("http://127.0.0.1/?state=st2&code=xyz")
+        );
+        server.await.unwrap();
     }
 
     #[tokio::test]

@@ -37,6 +37,7 @@ interface RawConfig {
 }
 
 let cachedRequest: {
+  apiBase: string;
   origin: string;
   token: string;
   result: Promise<RecordingCardConfig>;
@@ -44,8 +45,10 @@ let cachedRequest: {
 
 /** Share the pairing-config request for the current signed-in session. */
 export async function fetchRecordingCardConfig(): Promise<RecordingCardConfig> {
-  const agentBase = api().getAgentBaseUrl();
-  const token = api().getToken();
+  const client = api();
+  const agentBase = client.getAgentBaseUrl();
+  const token = client.getToken();
+  const apiBase = typeof client.getBaseUrl === "function" ? client.getBaseUrl() : "";
   if (!agentBase) {
     throw new Error("assistant service address is not ready");
   }
@@ -53,10 +56,24 @@ export async function fetchRecordingCardConfig(): Promise<RecordingCardConfig> {
     throw new Error("no signed-in session");
   }
   const origin = new URL(agentBase).origin;
-  if (cachedRequest?.origin === origin && cachedRequest.token === token) {
+  if (
+    cachedRequest?.apiBase === apiBase &&
+    cachedRequest?.origin === origin &&
+    cachedRequest.token === token
+  ) {
     return cachedRequest.result;
   }
-  const request = { origin, token, result: requestConfig(origin, token) };
+  const request = {
+    apiBase,
+    origin,
+    token,
+    result: (async () => {
+      if (typeof client.ensureAgentSession === "function") {
+        await client.ensureAgentSession().catch(() => undefined);
+      }
+      return requestConfig(origin, token);
+    })(),
+  };
   cachedRequest = request;
   try {
     return await request.result;
@@ -82,6 +99,7 @@ async function requestConfig(origin: string, token: string): Promise<RecordingCa
     throw new Error(`service returned a non-JSON response: ${raw.slice(0, 60)}`);
   }
   if (!response.ok) {
+    if (response.status === 401) throw new Error("recording_card_account_required");
     const detail = (payload as { detail?: string } | null)?.detail;
     // The server-side issuance gate denies binding-less accounts with this
     // machine code; map it so the renderer can localize it like the

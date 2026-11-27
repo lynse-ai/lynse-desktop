@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import i18next from "i18next";
 import {
   PollChatTransport,
   StreamChatTransport,
@@ -1120,6 +1121,24 @@ describe("transport selection by server", () => {
       },
     );
   }
+
+  it("sends the active interface language with poll and stream chat requests", async () => {
+    const previousLanguage = i18next.resolvedLanguage;
+    i18next.resolvedLanguage = "en-US";
+    try {
+      apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
+      apiMocks.get.mockResolvedValue({ status: "done", text: "ok" });
+      apiMocks.stream = streamReplaying([{ type: "done", text: "ok" }]);
+
+      await new PollChatTransport().send(sendOptions());
+      await new StreamChatTransport().send(sendOptions());
+
+      expect(apiMocks.post.mock.calls[0]![1]).toMatchObject({ language: "en" });
+      expect(apiMocks.stream.mock.calls[0]![1]).toMatchObject({ language: "en" });
+    } finally {
+      i18next.resolvedLanguage = previousLanguage;
+    }
+  });
 
   it("streams on the managed gateway host", async () => {
     apiMocks.getBaseUrl.mockReturnValue("https://api.lynse.cn");

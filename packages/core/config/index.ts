@@ -30,10 +30,12 @@ export const EDITION_STORAGE_KEY = "lynse_edition";
  * Smart detection of default edition when no user choice has been saved yet:
  * 1. Web build-time explicit env: NEXT_PUBLIC_LYNSE_EDITION
  * 2. Web domain heuristic: hostname ends with .ai -> intl, .cn -> cn
- * 3. Client/Tauri native environment:
- *    Inspect system timezone (Asia/Shanghai, Chongqing, Harbin, Urumqi, Beijing, PRC, etc.)
- *    and navigator language (starts with zh) -> cn.
- * 4. Build-time defined fallback (__LYNSE_EDITION__), or default "intl".
+ * 3. System timezone (user decision, 2026-11-26): a resolvable timezone is
+ *    authoritative — China-region zones (Asia/Shanghai, Chongqing, Harbin,
+ *    Urumqi, Beijing, PRC, Macau, Hong Kong, Taipei) -> cn, everything else
+ *    -> intl. Language never overrides the timezone.
+ * 4. Only when no timezone is available: navigator language zh -> cn.
+ * 5. Build-time defined fallback (__LYNSE_EDITION__), or default "intl".
  */
 export function detectDefaultEdition(): LynseEdition {
   // Web build-time explicit env
@@ -47,26 +49,28 @@ export function detectDefaultEdition(): LynseEdition {
     if (host === "lynse.cn" || host.endsWith(".lynse.cn") || host.endsWith(".cn")) return "cn";
   }
 
-  // System environment inspection (Tauri / desktop single package)
+  // System timezone inspection (Tauri / desktop single package). Authoritative:
+  // resolve-or-not decides whether we even look at the language below.
+  let timezone: string | undefined;
   if (typeof Intl !== "undefined" && typeof Intl.DateTimeFormat === "function") {
     try {
-      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      if (tz) {
-        const lowerTz = tz.toLowerCase();
-        if (
-          lowerTz.includes("shanghai") ||
-          lowerTz.includes("chongqing") ||
-          lowerTz.includes("harbin") ||
-          lowerTz.includes("urumqi") ||
-          lowerTz.includes("beijing") ||
-          lowerTz === "prc" ||
-          lowerTz === "asia/taipei" ||
-          lowerTz === "asia/hong_kong"
-        ) {
-          return "cn";
-        }
-      }
+      timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
     } catch {}
+  }
+  if (timezone) {
+    const lowerTz = timezone.toLowerCase();
+    const chinaRegion =
+      lowerTz.includes("shanghai") ||
+      lowerTz.includes("chongqing") ||
+      lowerTz.includes("chungking") ||
+      lowerTz.includes("harbin") ||
+      lowerTz.includes("urumqi") ||
+      lowerTz.includes("beijing") ||
+      lowerTz.includes("macau") ||
+      lowerTz === "prc" ||
+      lowerTz === "asia/taipei" ||
+      lowerTz === "asia/hong_kong";
+    return chinaRegion ? "cn" : "intl";
   }
 
   if (typeof navigator !== "undefined" && navigator.language) {

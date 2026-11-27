@@ -5,12 +5,11 @@ import { Label } from "@lynse/ui/components/ui/label";
 import { Input } from "@lynse/ui/components/ui/input";
 import { Button } from "@lynse/ui/components/ui/button";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@lynse/ui/components/ui/select";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@lynse/ui/components/ui/dropdown-menu";
 import { api } from "@lynse/core/api";
 import { useAuthStore } from "@lynse/core/auth";
 import {
@@ -18,20 +17,29 @@ import {
   agentUrlForApiUrl,
   DEFAULT_API_URL,
   TEST_API_URL,
+  defaultApiUrlForEdition,
+  type LynseEdition,
 } from "@lynse/core/config";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { Loader2 } from "../icons";
+import { Check, ChevronDown, Loader2 } from "../icons";
+import { RegionFlag } from "./flags";
 import { authErrorText } from "./auth-errors";
 
+type ServerEntry = { url: string; labelKey: string; edition: LynseEdition };
+
 /**
- * Backends testers can pick between. Production is the default selection so
- * an untouched config always points at the released backend — the same
- * default the API client itself falls back to (core/config).
+ * Backends testers can pick between, one entry per gateway. The login site
+ * (edition) is folded into the same list — every gateway belongs to exactly
+ * one account system — so picking a server also decides the sign-in methods
+ * through `onRegionChange` (user decision, 2026-11-27: one field instead of
+ * a separate region switcher). Production entries default first so an
+ * untouched config always points at a released backend (core/config).
  */
-const SERVER_PRESETS = [
-  { url: TEST_API_URL, labelKey: "auth.api_config_server_test" },
-  { url: DEFAULT_API_URL, labelKey: "auth.api_config_server_prod" },
-] as const;
+const SERVERS: ServerEntry[] = [
+  { url: TEST_API_URL, labelKey: "auth.api_config_server_test", edition: "cn" },
+  { url: defaultApiUrlForEdition("cn"), labelKey: "auth.region_cn", edition: "cn" },
+  { url: defaultApiUrlForEdition("intl"), labelKey: "auth.region_intl", edition: "intl" },
+];
 
 const DEFAULT_SERVER_URL = DEFAULT_API_URL;
 
@@ -46,9 +54,17 @@ const pillInputClass =
  * mounts inside the login page (API view / github build's main form) and on
  * the standalone /api-config page. `onSuccess` runs after a successful
  * connect; the standalone page uses it to leave, while inside the login flow
- * the auth gate swaps screens on its own.
+ * the auth gate swaps screens on its own. `onRegionChange` lets the host
+ * switch its login site (edition) when the picked server belongs to another
+ * one; optional because the standalone page has no login flow.
  */
-export function ApiAuthPanel({ onSuccess }: { onSuccess?: () => void }) {
+export function ApiAuthPanel({
+  onSuccess,
+  onRegionChange,
+}: {
+  onSuccess?: () => void;
+  onRegionChange?: (edition: LynseEdition) => void;
+}) {
   const { t } = useTranslation();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const login = useAuthStore((s) => s.login);
@@ -66,18 +82,20 @@ export function ApiAuthPanel({ onSuccess }: { onSuccess?: () => void }) {
       setAppliedUrl(savedUrl);
       // A legacy hand-typed URL has no preset to show — fall back to production.
       setSelectedUrl(
-        SERVER_PRESETS.some((p) => p.url === savedUrl)
-          ? savedUrl
-          : DEFAULT_SERVER_URL,
+        SERVERS.some((p) => p.url === savedUrl) ? savedUrl : DEFAULT_SERVER_URL,
       );
     }
     const savedKey = localStorage.getItem("lynse_api_key");
     if (savedKey) setApiKey(savedKey);
   }, []);
 
+  function entryFor(url: string): ServerEntry | undefined {
+    return SERVERS.find((p) => p.url === url);
+  }
+
   function serverLabel(url: string): string {
-    const preset = SERVER_PRESETS.find((p) => p.url === url);
-    return preset ? t(preset.labelKey) : url;
+    const entry = entryFor(url);
+    return entry ? t(entry.labelKey) : url;
   }
 
   /** Apply the selected server to this session (client + persistence). The
@@ -94,13 +112,21 @@ export function ApiAuthPanel({ onSuccess }: { onSuccess?: () => void }) {
   }
 
   /**
-   * The confirm button: point this session at the selected server. Switching
-   * while signed in drops the session first — its token belongs to the
-   * previous server.
+   * Point this session at the selected server. The edition switch runs first
+   * (its host callback resets the gateway to that edition's default), then
+   * the explicit apply pins the exact picked URL on top. Switching while
+   * signed in drops the session first — its token belongs to the previous
+   * server.
    */
+  function applySelectedServer() {
+    const entry = entryFor(selectedUrl);
+    if (entry) onRegionChange?.(entry.edition);
+    applyServer(selectedUrl);
+  }
+
   function handleConfirmServer() {
     if (isAuthenticated && selectedUrl !== appliedUrl) logout();
-    applyServer(selectedUrl);
+    applySelectedServer();
   }
 
   async function handleConnect() {
@@ -109,7 +135,7 @@ export function ApiAuthPanel({ onSuccess }: { onSuccess?: () => void }) {
     setConnecting(true);
     // Connecting always targets the currently selected server, confirmed
     // through the button above or not.
-    applyServer(selectedUrl);
+    applySelectedServer();
     try {
       await login(apiKey.trim(), selectedUrl);
       onSuccess?.();
@@ -125,9 +151,7 @@ export function ApiAuthPanel({ onSuccess }: { onSuccess?: () => void }) {
     setApiKey("");
   }
 
-  const serverItems = Object.fromEntries(
-    SERVER_PRESETS.map((p) => [p.url, t(p.labelKey)]),
-  );
+  const selectedEntry = entryFor(selectedUrl);
 
   return (
     <div className="space-y-3.5">
@@ -136,25 +160,46 @@ export function ApiAuthPanel({ onSuccess }: { onSuccess?: () => void }) {
           {t("auth.api_config_base_url")}
         </Label>
         <div className="flex items-center gap-2">
-          <Select
-            items={serverItems}
-            value={selectedUrl}
-            onValueChange={(value) => setSelectedUrl(String(value))}
-          >
-            <SelectTrigger
-              id="api-config-url"
-              className={`flex-1 ${pillInputClass}`}
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {SERVER_PRESETS.map((preset) => (
-                <SelectItem key={preset.url} value={preset.url}>
-                  {t(preset.labelKey)}
-                </SelectItem>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <button
+                  type="button"
+                  id="api-config-url"
+                  data-testid="api-server-select"
+                  className={`flex h-9 flex-1 items-center gap-2 rounded-full bg-muted px-3.5 text-sm shadow-none transition-colors hover:bg-muted/70`}
+                >
+                  {selectedEntry && (
+                    <RegionFlag
+                      region={selectedEntry.edition}
+                      className="h-3 w-[17px] shrink-0 rounded-[3px] ring-1 ring-border/40"
+                    />
+                  )}
+                  <span className="truncate text-foreground/90">{serverLabel(selectedUrl)}</span>
+                  <ChevronDown className="ml-auto size-3.5 shrink-0 text-muted-foreground" />
+                </button>
+              }
+            />
+            <DropdownMenuContent align="start" className="w-56 p-1">
+              {SERVERS.map((entry) => (
+                <DropdownMenuItem
+                  key={entry.url}
+                  onClick={() => setSelectedUrl(entry.url)}
+                  className="flex cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-1.5 text-xs"
+                >
+                  <RegionFlag
+                    region={entry.edition}
+                    className="h-3 w-[17px] shrink-0 rounded-[3px] ring-1 ring-border/40"
+                  />
+                  <div className="flex min-w-0 flex-col">
+                    <span className="font-medium text-foreground">{t(entry.labelKey)}</span>
+                    <span className="truncate font-mono text-3xs text-muted-foreground">{entry.url}</span>
+                  </div>
+                  {selectedUrl === entry.url && <Check className="ml-auto size-3.5 text-primary" />}
+                </DropdownMenuItem>
               ))}
-            </SelectContent>
-          </Select>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button
             size="sm"
             variant="outline"

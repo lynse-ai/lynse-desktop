@@ -6,7 +6,7 @@ import { createAuthStore, getAuthStore, registerAuthStore } from "../auth";
 import { DEFAULT_API_URL, AGENT_API_URL_STORAGE_KEY, CLOUDBASE_AGENT_URL, STAGING_CLOUDBASE_AGENT_URL, LEGACY_CLOUDBASE_AGENT_URL, agentUrlForApiUrl, DEFAULT_INTEGRATIONS_API_URL, INTEGRATIONS_API_URL_STORAGE_KEY } from "../config";
 import { defaultStorage } from "./storage";
 import { QueryProvider } from "../provider";
-import { initI18n } from "../i18n";
+import { initI18n, setLocaleApiBaseUrl } from "../i18n";
 import { analytics, PostHogProvider, posthog } from "../analytics";
 import { telemetry, SentryErrorBoundary } from "../telemetry";
 import type { CoreProviderProps } from "./types";
@@ -14,6 +14,10 @@ import type { StorageAdapter } from "../types/storage";
 
 let initialized = false;
 let authStore: ReturnType<typeof createAuthStore>;
+
+function resolveApiBaseUrl(apiBaseUrl: string, storage: StorageAdapter): string {
+  return storage.getItem("lynse_api_url") || apiBaseUrl || DEFAULT_API_URL;
+}
 
 /** Idempotent core bootstrap (API client + auth store). Exported for
  *  non-React bootstrap paths and tests; `CoreProvider` calls it on mount. */
@@ -30,10 +34,10 @@ export function initCore(
   // Server precedence: user's saved pick → build-time env → production
   // default. An empty URL must never reach the client: the packaged shells
   // fetch from a custom-scheme origin where relative URLs don't parse.
-  const savedApiUrl = storage.getItem("lynse_api_url");
-  const effectiveUrl = savedApiUrl || apiBaseUrl || DEFAULT_API_URL;
+  const effectiveUrl = resolveApiBaseUrl(apiBaseUrl, storage);
 
   const apiClient = new ApiClient(effectiveUrl, {
+    onBaseUrlChange: setLocaleApiBaseUrl,
     onUnauthorized: () => {
       // The saved credential is dead. Drop the whole session so the AuthGate
       // swaps to the launch page — the user can sign in again there (or
@@ -113,7 +117,7 @@ export function CoreProvider({
 }: CoreProviderProps) {
   useMemo(
     () => {
-      initI18n({ locale, resources });
+      initI18n({ locale, resources, apiBaseUrl: resolveApiBaseUrl(apiBaseUrl, storage) });
       if (analyticsConfig) {
         analytics.init(analyticsConfig);
       }

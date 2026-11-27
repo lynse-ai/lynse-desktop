@@ -17,14 +17,18 @@ import {
  */
 
 const apiMock = vi.hoisted(() => ({
+  baseUrl: "https://api.lynse.cn",
   agentBase: "https://lynclaw-api.example.sh.run.tcloudbase.com",
   token: "token-abc" as string | null,
+  ensureAgentSession: vi.fn(async () => undefined),
 }));
 
 vi.mock("@lynse/core/api", () => ({
   api: () => ({
+    getBaseUrl: () => apiMock.baseUrl,
     getAgentBaseUrl: () => apiMock.agentBase,
     getToken: () => apiMock.token,
+    ensureAgentSession: apiMock.ensureAgentSession,
   }),
 }));
 
@@ -39,8 +43,10 @@ function stubFetch(body: string, init?: { status?: number; ok?: boolean }) {
 
 beforeEach(() => {
   resetRecordingCardConfigCache();
+  apiMock.baseUrl = "https://api.lynse.cn";
   apiMock.agentBase = "https://lynclaw-api.example.sh.run.tcloudbase.com";
   apiMock.token = "token-abc";
+  apiMock.ensureAgentSession.mockClear();
   vi.unstubAllGlobals();
 });
 
@@ -77,6 +83,20 @@ describe("recording card credentials fetch", () => {
   it("maps the server-side no-binding denial to the localizable code", async () => {
     stubFetch(JSON.stringify({ detail: "recording_card_not_bound" }), { status: 403, ok: false });
     await expect(fetchRecordingCardConfig()).rejects.toThrow("recording_card_not_bound");
+  });
+
+  it("maps 401 responses to recording_card_account_required and binds the agent session", async () => {
+    stubFetch(JSON.stringify({ detail: "Sign in again" }), { status: 401, ok: false });
+    await expect(fetchRecordingCardConfig()).rejects.toThrow("recording_card_account_required");
+    expect(apiMock.ensureAgentSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidates the cached config when the business server base URL changes", async () => {
+    const fetchMock = stubFetch(JSON.stringify({ password: "paired-key-123" }));
+    await fetchRecordingCardConfig();
+    apiMock.baseUrl = "https://api-en.lynse.ai";
+    await fetchRecordingCardConfig();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("fails fast without a session or agent address", async () => {

@@ -282,6 +282,7 @@ export type DesktopApi = {
         verifier: string,
         redirectUri: string,
         clientId: string,
+        clientSecret?: string,
       ) => Promise<{ id_token: string }>;
       firebaseSignIn: (googleIdToken: string, apiKey: string) => Promise<{ id_token: string }>;
     };

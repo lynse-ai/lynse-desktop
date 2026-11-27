@@ -22,6 +22,10 @@ type RelayPhase = "starting" | "completing" | "failed";
  * the query copy is only a same-load convenience.
  */
 const NONCE_STORAGE_KEY = "lynse_google_desktop_relay_nonce";
+/** Tracks whether this relay attempt already navigated away via
+ *  signInWithRedirect so a null getRedirectResult() on return fails cleanly
+ *  instead of re-triggering an infinite redirect loop. */
+const ATTEMPTED_NONCE_STORAGE_KEY = "lynse_google_desktop_relay_attempted_nonce";
 
 function readNonce(): string | null {
   const query = new URLSearchParams(window.location.search).get("nonce");
@@ -39,6 +43,31 @@ function parkNonce(nonce: string): void {
   } catch {
     // Storage unavailable: the query-string nonce still covers the
     // same-load case; nothing else to do.
+  }
+}
+
+function readAttemptedNonce(): string | null {
+  try {
+    return window.localStorage.getItem(ATTEMPTED_NONCE_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function parkAttemptedNonce(nonce: string): void {
+  try {
+    window.localStorage.setItem(ATTEMPTED_NONCE_STORAGE_KEY, nonce);
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+function clearRelayStorage(): void {
+  try {
+    window.localStorage.removeItem(NONCE_STORAGE_KEY);
+    window.localStorage.removeItem(ATTEMPTED_NONCE_STORAGE_KEY);
+  } catch {
+    // Ignore storage failures.
   }
 }
 
@@ -84,6 +113,7 @@ export function GoogleDesktopRelay() {
     }
 
     const finish = (identityToken: string | null, error: string | null) => {
+      clearRelayStorage();
       // Contract match for the auth window's interceptor: the nonce rides the
       // query, the identity token stays in the FRAGMENT (never sent to any
       // server), errors ride the query. The deployment prefix (production
@@ -105,13 +135,23 @@ export function GoogleDesktopRelay() {
     };
 
     // A pending redirect result means the Google round trip just came back;
-    // otherwise start it (the page navigates away to Google).
+    // otherwise start it (the page navigates away to Google). If we already
+    // redirected for this nonce and getRedirectResult() returned null (e.g.
+    // WebKit ITP / third-party storage partitioning), fail cleanly rather than
+    // looping signInWithRedirect indefinitely.
     completeGoogleBrowserRedirect()
       .then((identityToken) => {
         if (identityToken) {
           finish(identityToken, null);
           return;
         }
+        if (readAttemptedNonce() === nonce) {
+          setPhase("failed");
+          setErrorDetail("auth/redirect-result-missing");
+          finish(null, "auth/redirect-result-missing");
+          return;
+        }
+        parkAttemptedNonce(nonce);
         setPhase("starting");
         startGoogleBrowserRedirect()
           .then(() => setPhase("completing"))

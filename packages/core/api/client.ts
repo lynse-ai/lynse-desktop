@@ -2,6 +2,7 @@ import { API_PROXY_PREFIX } from "../config";
 
 type ClientOptions = {
   onUnauthorized?: () => void;
+  onBaseUrlChange?: (baseUrl: string) => void;
   identity?: { platform?: string; version?: string; os?: string };
 };
 
@@ -84,11 +85,13 @@ export class ApiClient {
   private agentSession: { controller: AbortController; promise: Promise<void> } | null = null;
   private sessionRevision = 0;
   private onUnauthorized?: () => void;
+  private onBaseUrlChange?: ClientOptions["onBaseUrlChange"];
   private identity?: ClientOptions["identity"];
 
   constructor(backendUrl: string, opts: ClientOptions = {}) {
     this.backendUrl = backendUrl.replace(/\/+$/, "");
     this.onUnauthorized = opts.onUnauthorized;
+    this.onBaseUrlChange = opts.onBaseUrlChange;
     this.identity = opts.identity;
   }
 
@@ -109,8 +112,10 @@ export class ApiClient {
 
   setBaseUrl(url: string) {
     const normalized = url.replace(/\/+$/, "");
-    if (normalized !== this.backendUrl) this.clearAgentSession();
+    if (normalized === this.backendUrl) return;
+    this.clearAgentSession();
     this.backendUrl = normalized;
+    this.onBaseUrlChange?.(normalized);
   }
 
   /** The configured backend origin (no trailing slash), e.g. `https://api.lynse.cn`. */

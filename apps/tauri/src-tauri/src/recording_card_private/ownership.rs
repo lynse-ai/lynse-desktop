@@ -208,13 +208,16 @@ impl CardAccount {
         "https://lynclaw-api-319577-10-1401959758.sh.run.tcloudbase.com".to_string()
     }
 
-    pub(super) async fn fetch_credential(
-        &self,
-        access: &CardAccess,
-        vendor_id: Option<u16>,
-        product_id: Option<u16>,
-    ) -> Result<CardCredential, OwnershipError> {
-        let clean_token = access.token.trim();
+    pub(super) fn mcp_origin(&self) -> &str {
+        match self.gateway {
+            "https://api.lynse.cn" | "https://gapp.lynse.cn" => "https://www.lynse.cn",
+            "https://api-en.lynse.ai" => "https://www.lynse.ai",
+            other => other,
+        }
+    }
+
+    fn bearer_auth_header(raw_token: &str) -> Result<HeaderValue, OwnershipError> {
+        let clean_token = raw_token.trim();
         let auth_str = if clean_token.to_ascii_lowercase().starts_with("bearer ") {
             clean_token.to_string()
         } else {
@@ -225,110 +228,103 @@ impl CardAccount {
             OwnershipError::AccountRequired
         })?;
         token_header.set_sensitive(true);
+        Ok(token_header)
+    }
 
-        let gateway_origin = self.credential_gateway(access);
-        let endpoint = format!("{}/api/desktop/recording-card/config", gateway_origin);
-
-        let send_req = |client: &reqwest::Client| {
-            client
-                .get(&endpoint)
-                .header(AUTHORIZATION, token_header.clone())
-                .header(CACHE_CONTROL, "no-cache, no-store")
-                .send()
+    /// Ensure the shared CloudBase assistant service knows which backend
+    /// gateway (`api.lynse.cn` vs `api-en.lynse.ai`) owns this session token.
+    async fn bind_agent_session(
+        &self,
+        client: &reqwest::Client,
+        gateway_origin: &str,
+        raw_token: &str,
+    ) {
+        if gateway_origin == self.gateway {
+            return;
+        }
+        let Ok(mut token_header) = HeaderValue::from_str(raw_token.trim()) else {
+            return;
         };
-
-        // Attempt with certificate-pinned secure client first, but gracefully fall back
-        // to standard client if Schannel (Windows) or proxy causes TLS handshake failure.
-        let mut response = match SECURE_CLIENT.as_ref() {
-            Ok(sec_client) => match send_req(sec_client).await {
-                Ok(resp) => resp,
-                Err(e) => {
-                    log::warn!("[recording-card] secure client credential fetch failed: {e}, attempting fallback to standard client");
-                    let std_client = CLIENT.as_ref().map_err(|err| {
-                        log::error!("[recording-card] standard client init failed: {err}");
-                        OwnershipError::Unavailable
-                    })?;
-                    send_req(std_client).await.map_err(|fallback_err| {
-                        log::error!("[recording-card] fallback credential fetch failed: {fallback_err}");
-                        OwnershipError::Unavailable
-                    })?
-                }
-            },
-            Err(sec_err) => {
-                log::warn!("[recording-card] secure client unavailable: {sec_err}, using standard client");
-                let std_client = CLIENT.as_ref().map_err(|err| {
-                    log::error!("[recording-card] standard client init failed: {err}");
-                    OwnershipError::Unavailable
-                })?;
-                send_req(std_client).await.map_err(|e| {
-                    log::error!("[recording-card] credential fetch failed: {e}");
-                    OwnershipError::Unavailable
-                })?
+        token_header.set_sensitive(true);
+        let endpoint = format!("{gateway_origin}/api/session/backend");
+        match client
+            .post(&endpoint)
+            .header(AUTHORIZATION, token_header)
+            .header(CACHE_CONTROL, "no-cache, no-store")
+            .json(&serde_json::json!({ "host": self.gateway }))
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                log::info!(
+                    "[recording-card] bound agent session backend to {}",
+                    self.gateway
+                );
             }
-        };
-
-        // If the assistant config route returned 404, attempt fallback to legacy MCP credential route
-        if response.status() == reqwest::StatusCode::NOT_FOUND {
-            let mcp_origin = match self.gateway {
-                "https://api.lynse.cn" | "https://gapp.lynse.cn" => "https://www.lynse.cn",
-                "https://api-en.lynse.ai" => "https://www.lynse.ai",
-                other => other,
-            };
-            let mcp_endpoint = format!(
-                "{}/platform/oauth/api/agent/device/recording-card/credential",
-                mcp_origin
-            );
-            if let Ok(std_client) = CLIENT.as_ref() {
-                let mut req = std_client
-                    .post(&mcp_endpoint)
-                    .header(AUTHORIZATION, token_header.clone())
-                    .header(CACHE_CONTROL, "no-cache, no-store");
-                if let (Some(vid), Some(pid)) = (vendor_id, product_id) {
-                    req = req.json(&serde_json::json!({ "vendorId": vid, "productId": pid }));
-                }
-                if let Ok(resp) = req.send().await {
-                    response = resp;
-                }
+            Ok(resp) => {
+                log::warn!(
+                    "[recording-card] agent session bind to {} returned HTTP {}",
+                    self.gateway,
+                    resp.status().as_u16()
+                );
+            }
+            Err(err) => {
+                log::warn!(
+                    "[recording-card] agent session bind to {} failed: {err}",
+                    self.gateway
+                );
             }
         }
+    }
 
+    async fn parse_credential_response(
+        response: reqwest::Response,
+        source: &str,
+    ) -> Result<CardCredential, OwnershipError> {
         match response.status().as_u16() {
             401 => {
-                log::warn!("[recording-card] credential fetch: 401 Unauthorized");
+                log::warn!("[recording-card] {source} credential fetch: 401 Unauthorized");
                 return Err(OwnershipError::AccountRequired);
             }
             403 => {
                 let payload: Value = response.json().await.unwrap_or_default();
-                log::warn!("[recording-card] credential fetch: 403 Forbidden ({payload:?})");
-                if payload.get("detail").and_then(Value::as_str) == Some("recording_card_not_bound") {
+                log::warn!("[recording-card] {source} credential fetch: 403 Forbidden ({payload:?})");
+                if payload.get("detail").and_then(Value::as_str) == Some("recording_card_not_bound")
+                {
                     return Err(OwnershipError::NotBound);
                 }
                 return Err(OwnershipError::Denied);
             }
             429 => {
-                log::warn!("[recording-card] rate limit exceeded on credential fetch");
+                log::warn!("[recording-card] {source} rate limit exceeded on credential fetch");
                 return Err(OwnershipError::Unavailable);
             }
             200 => {}
             status => {
-                log::warn!("[recording-card] credential fetch unexpected HTTP status: {status}");
+                log::warn!(
+                    "[recording-card] {source} credential fetch unexpected HTTP status: {status}"
+                );
                 return Err(OwnershipError::Unavailable);
             }
         }
 
         let payload: Value = response.json().await.map_err(|e| {
-            log::warn!("[recording-card] credential response JSON parse error: {e}");
+            log::warn!("[recording-card] {source} credential response JSON parse error: {e}");
             OwnershipError::Unavailable
         })?;
         let password_str = match payload.get("password").and_then(Value::as_str) {
             Some(p) => p,
             None => {
-                log::warn!("[recording-card] credential payload missing 'password': {payload:?}");
+                log::warn!(
+                    "[recording-card] {source} credential payload missing 'password': {payload:?}"
+                );
                 return Err(OwnershipError::Unavailable);
             }
         };
         if password_str.len() < 8 || password_str.len() > 64 || password_str.contains('#') {
-            log::warn!("[recording-card] credential payload invalid password length or content");
+            log::warn!(
+                "[recording-card] {source} credential payload invalid password length or content"
+            );
             return Err(OwnershipError::Unavailable);
         }
 
@@ -348,6 +344,113 @@ impl CardAccount {
             vendor_id: vid,
             product_id: pid,
         })
+    }
+
+    pub(super) async fn fetch_fallback_credential(
+        &self,
+        access: &CardAccess,
+        vendor_id: Option<u16>,
+        product_id: Option<u16>,
+    ) -> Result<CardCredential, OwnershipError> {
+        let token_header = Self::bearer_auth_header(&access.token)?;
+        let mcp_endpoint = format!(
+            "{}/platform/oauth/api/agent/device/recording-card/credential",
+            self.mcp_origin()
+        );
+        let std_client = CLIENT.as_ref().map_err(|err| {
+            log::error!("[recording-card] standard client init failed: {err}");
+            OwnershipError::Unavailable
+        })?;
+        let mut req = std_client
+            .post(&mcp_endpoint)
+            .header(AUTHORIZATION, token_header)
+            .header(CACHE_CONTROL, "no-cache, no-store");
+        if let (Some(vid), Some(pid)) = (vendor_id, product_id) {
+            req = req.json(&serde_json::json!({ "vendorId": vid, "productId": pid }));
+        }
+        let response = req.send().await.map_err(|err| {
+            log::warn!("[recording-card] fallback credential fetch failed ({mcp_endpoint}): {err}");
+            OwnershipError::Unavailable
+        })?;
+        Self::parse_credential_response(response, "mcp-fallback").await
+    }
+
+    pub(super) async fn fetch_credential(
+        &self,
+        access: &CardAccess,
+        vendor_id: Option<u16>,
+        product_id: Option<u16>,
+    ) -> Result<CardCredential, OwnershipError> {
+        let token_header = Self::bearer_auth_header(&access.token)?;
+        let gateway_origin = self.credential_gateway(access);
+        let endpoint = format!("{}/api/desktop/recording-card/config", gateway_origin);
+
+        let std_client = CLIENT.as_ref().map_err(|err| {
+            log::error!("[recording-card] standard client init failed: {err}");
+            OwnershipError::Unavailable
+        })?;
+        self.bind_agent_session(std_client, &gateway_origin, &access.token)
+            .await;
+
+        let send_req = |client: &reqwest::Client| {
+            client
+                .get(&endpoint)
+                .header(AUTHORIZATION, token_header.clone())
+                .header(CACHE_CONTROL, "no-cache, no-store")
+                .send()
+        };
+
+        // Attempt with certificate-pinned secure client first, but gracefully fall back
+        // to standard client if Schannel (Windows), CloudBase root CA, or proxy causes TLS failure.
+        let primary_result = match SECURE_CLIENT.as_ref() {
+            Ok(sec_client) => match send_req(sec_client).await {
+                Ok(resp) => Ok(resp),
+                Err(e) => {
+                    log::debug!("[recording-card] secure client credential fetch failed: {e}, falling back to standard client");
+                    send_req(std_client).await.map_err(|fallback_err| {
+                        log::warn!("[recording-card] agent credential fetch failed: {fallback_err}");
+                        OwnershipError::Unavailable
+                    })
+                }
+            },
+            Err(sec_err) => {
+                log::warn!("[recording-card] secure client unavailable: {sec_err}, using standard client");
+                send_req(std_client).await.map_err(|e| {
+                    log::warn!("[recording-card] agent credential fetch failed: {e}");
+                    OwnershipError::Unavailable
+                })
+            }
+        };
+
+        match primary_result {
+            Ok(response) => match Self::parse_credential_response(response, "agent-config").await {
+                Ok(creds) => Ok(creds),
+                Err(OwnershipError::NotBound) => Err(OwnershipError::NotBound),
+                Err(OwnershipError::Denied) => Err(OwnershipError::Denied),
+                Err(primary_err) => {
+                    log::warn!(
+                        "[recording-card] agent-config failed ({primary_err}), trying site credential fallback ({})",
+                        self.mcp_origin()
+                    );
+                    match self
+                        .fetch_fallback_credential(access, vendor_id, product_id)
+                        .await
+                    {
+                        Ok(creds) => Ok(creds),
+                        Err(OwnershipError::Unavailable) => Err(primary_err),
+                        Err(fallback_err) => Err(fallback_err),
+                    }
+                }
+            },
+            Err(primary_err) => {
+                log::warn!(
+                    "[recording-card] agent-config transport failed ({primary_err}), trying site credential fallback ({})",
+                    self.mcp_origin()
+                );
+                self.fetch_fallback_credential(access, vendor_id, product_id)
+                    .await
+            }
+        }
     }
 
     pub(super) async fn verify(
@@ -515,6 +618,29 @@ mod tests {
             verify_bindings(&card(), &json!({"code": 200, "data": {}})),
             Err(OwnershipError::Unavailable)
         ));
+    }
+
+    #[test]
+    fn maps_cn_and_intl_gateways_to_matching_site_origins() {
+        let cn = CardAccount::from_access(&CardAccess {
+            api_base_url: "https://api.lynse.cn/".into(),
+            token: "tok-cn".into(),
+            gateway_url: None,
+            agent_base_url: None,
+        })
+        .expect("cn account");
+        assert_eq!(cn.gateway, "https://api.lynse.cn");
+        assert_eq!(cn.mcp_origin(), "https://www.lynse.cn");
+
+        let intl = CardAccount::from_access(&CardAccess {
+            api_base_url: "https://api-en.lynse.ai".into(),
+            token: "tok-intl".into(),
+            gateway_url: None,
+            agent_base_url: None,
+        })
+        .expect("intl account");
+        assert_eq!(intl.gateway, "https://api-en.lynse.ai");
+        assert_eq!(intl.mcp_origin(), "https://www.lynse.ai");
     }
 
     #[tokio::test]

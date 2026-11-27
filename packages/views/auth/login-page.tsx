@@ -76,14 +76,8 @@ import {
   sendSmsCaptcha,
   smsSessionFromLogin,
 } from "@lynse/core/auth/sms";
-import { changeLanguage, useTranslation } from "@lynse/core/i18n/react";
-import { ArrowRight, Check, ChevronDown, ChevronRight, KeyRound, Loader2, QrCode } from "../icons";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@lynse/ui/components/ui/dropdown-menu";
+import { useTranslation } from "@lynse/core/i18n/react";
+import { ArrowLeft, ArrowRight, ChevronRight, KeyRound, Loader2, QrCode } from "../icons";
 import { getDesktopAppApi, openExternalUrl } from "../app-update";
 import { isWebPlatform } from "../platform";
 import {
@@ -156,12 +150,17 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
   // Overseas (intl) edition only supports Email, Google, and Apple sign-in.
   // All other login methods (phone SMS, WeChat, QR) are strictly excluded.
   const activeView: LoginView = intl ? (view === "api" ? "api" : "email") : view;
+  // First screen of the active edition. Secondary screens (more / QR / API /
+  // cn email) get the top-left back arrow instead of the old bottom text
+  // buttons (user request, 2026-11-27).
+  const defaultView: LoginView = intl ? "email" : "phone";
+  const showBack = activeView !== defaultView;
+  const backToFirstScreen = () => setView(defaultView);
 
   const handleSelectEdition = (newEdition: LynseEdition) => {
     if (newEdition === edition) return;
     setEdition(newEdition);
     setEditionState(newEdition);
-    if (newEdition === "cn") void changeLanguage("zh-Hans");
 
     // Switch default API gateway & agent URL
     const newApiUrl = defaultApiUrlForEdition(newEdition);
@@ -898,6 +897,7 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
       if (landing?.kind === "identity") {
         await completeGoogleIdentity(landing.identityToken, attempt);
       } else {
+        console.warn("[google-relay] sign-in rejected:", landing?.error ?? "invalid_landing");
         setError(t("auth.login_failed"));
       }
     } catch (e: unknown) {
@@ -1201,7 +1201,13 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
           <img src={LYNSE_LOGO_SRC} alt="" className="h-5 w-auto dark:invert" />
         </button>
 
-        {/* Content block — naturally spaced down the column */}
+        {/* Vertical breathing spacers: the free space under the logo row
+            splits 1:2 with a 32px cap on the top share (desktop only), so the
+            wordmark-to-heading gap stays uniform on short views instead of
+            scaling with the view's free space (user feedback, 2026-11-27). */}
+        {!web && <div aria-hidden className="grow-[1] max-h-8" />}
+
+        {/* Content block */}
         <div
           className={cn(
             "flex w-full flex-col",
@@ -1223,7 +1229,7 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
             {subtitle ?? t("auth.login_subtitle")}
           </p>
 
-          <div className={cn("w-full", web ? "mt-7" : "mt-5")}>
+          <div className={cn("w-full", web ? "mt-7" : "mt-6")}>
           {activeView === "more" ? (
           /* ── More ways to sign in ─────────────────────── */
           !web && waitingNotice ? (
@@ -1303,14 +1309,6 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
               )}
             </div>
             <div className="text-center">
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-8 text-xs text-muted-foreground"
-                onClick={() => setView(intl ? "email" : "phone")}
-              >
-                {t(intl ? "auth.back_to_login" : "auth.back_to_phone")}
-              </Button>
               {isTestMode() && (
                 <Button
                   size="sm"
@@ -1366,14 +1364,6 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
                 )}
               </div>
               <p className="text-2xs leading-relaxed text-muted-foreground">{qrHint}</p>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-8 text-xs text-muted-foreground"
-                onClick={() => setView("phone")}
-              >
-                {t("auth.back_to_phone")}
-              </Button>
             </div>
           ) : (
             /* ── Unified Account / Verification Code (Muse progressive single-input) ── */
@@ -1507,7 +1497,7 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
                     <p className="mt-2 text-center text-xs text-destructive">{smsError}</p>
                   )}
 
-                  <div className={web ? "mt-4" : "mt-3"}>
+                  <div className="mt-4">
                     <AgreementCheckbox
                       agreed={agreed}
                       onToggle={() => setAgreed(!agreed)}
@@ -1588,7 +1578,7 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
                     <p className="mt-2 text-center text-xs text-destructive">{smsError}</p>
                   )}
 
-                  <div className={web ? "mt-4" : "mt-3"}>
+                  <div className="mt-4">
                     <AgreementCheckbox
                       agreed={agreed}
                       onToggle={() => setAgreed(!agreed)}
@@ -1651,17 +1641,14 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
              same UI the /api-config page renders. Locked behind the logo
              5-tap (test mode) in every build. ─────── */
           <>
-            <ApiAuthPanel />
-            <div className="mt-2 text-center">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-8 text-xs text-muted-foreground"
-                  onClick={() => setView(intl ? "email" : "phone")}
-                >
-                  {t(intl ? "auth.back_to_login" : "auth.back_to_phone")}
-                </Button>
-            </div>
+            <ApiAuthPanel
+              onRegionChange={(nextEdition) => {
+                // Edition switching normally returns to the default sign-in
+                // form; from the maintenance panel, stay on it.
+                handleSelectEdition(nextEdition);
+                setView("api");
+              }}
+            />
           </>
         )}
 
@@ -1669,6 +1656,24 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
         {footer && <div className="mt-4 text-center">{footer}</div>}
           </div>
         </div>
+
+        {/* Back button — sits under the active view's content (user decision,
+            2026-11-27: moved back down from the logo row) and returns to the
+            first screen from every secondary view. */}
+        {showBack && (
+          <div className={cn("flex justify-center", web ? "mt-5" : "mt-4")}>
+            <button
+              type="button"
+              onClick={backToFirstScreen}
+              className="flex h-8 items-center gap-1.5 rounded-full px-3 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <ArrowLeft className="size-3.5" />
+              <span>{t("auth.back_home")}</span>
+            </button>
+          </div>
+        )}
+
+        {!web && <div aria-hidden className="grow-[2]" />}
 
         {/* Keep the extra Web sign-in options below the centered form. On
             desktop, waitingNotice already renders inside the compact form so it
@@ -1694,50 +1699,6 @@ export function LoginPage({ subtitle, footer, hideMoreLogin = false }: {
             {t("auth.more_login")}
           </button>
         ) : null}
-
-        {/* ── Bottom site switcher: small subtle text at bottom ── */}
-        {!web && <div className="mt-auto flex items-center justify-center pt-2 pb-1 text-2xs text-muted-foreground/60 select-none">
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <button
-                  type="button"
-                  disabled={codeSending || smsSubmitting}
-                  className="inline-flex items-center gap-1 font-normal text-muted-foreground/70 hover:text-foreground transition-colors cursor-pointer"
-                  aria-label={t("auth.server_region")}
-                >
-                  <span>{t("auth.server_region")}:</span>
-                  <span className="font-mono underline underline-offset-2 text-foreground/80">
-                    {edition === "cn" ? "lynse.cn" : "lynse.ai"}
-                  </span>
-                  <ChevronDown className="size-2.5 opacity-60" />
-                </button>
-              }
-            />
-            <DropdownMenuContent align="center" side="top" className="w-40 p-1">
-              <DropdownMenuItem
-                onClick={() => handleSelectEdition("cn")}
-                className="flex items-center justify-between rounded-md px-2.5 py-1.5 text-xs cursor-pointer"
-              >
-                <div className="flex flex-col">
-                  <span className="font-mono font-medium text-foreground">lynse.cn</span>
-                  <span className="text-3xs text-muted-foreground">{t("auth.region_cn")}</span>
-                </div>
-                {edition === "cn" && <Check className="size-3.5 text-primary" />}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => handleSelectEdition("intl")}
-                className="flex items-center justify-between rounded-md px-2.5 py-1.5 text-xs cursor-pointer"
-              >
-                <div className="flex flex-col">
-                  <span className="font-mono font-medium text-foreground">lynse.ai</span>
-                  <span className="text-3xs text-muted-foreground">{t("auth.region_intl")}</span>
-                </div>
-                {edition === "intl" && <Check className="size-3.5 text-primary" />}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>}
       </div>
 
       {/* ── Right column. Desktop: full-height rounded artwork card, inset on

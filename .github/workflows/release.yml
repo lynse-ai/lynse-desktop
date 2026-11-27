@@ -445,6 +445,23 @@ jobs:
           node apps/tauri/scripts/configure-windows-signing.cjs `
             --script (Join-Path $env:GITHUB_WORKSPACE 'apps/tauri/scripts/sign-windows.ps1')
 
+      - name: Check Google native desktop OAuth env
+        shell: bash
+        env:
+          VITE_GOOGLE_DESKTOP_CLIENT_ID: ${{ vars.VITE_GOOGLE_DESKTOP_CLIENT_ID || secrets.VITE_GOOGLE_DESKTOP_CLIENT_ID }}
+          VITE_GOOGLE_DESKTOP_CLIENT_SECRET: ${{ secrets.VITE_GOOGLE_DESKTOP_CLIENT_SECRET }}
+          VITE_FIREBASE_WEB_API_KEY: ${{ vars.VITE_FIREBASE_WEB_API_KEY || secrets.VITE_FIREBASE_WEB_API_KEY }}
+        run: |
+          missing=""
+          for name in VITE_GOOGLE_DESKTOP_CLIENT_ID VITE_GOOGLE_DESKTOP_CLIENT_SECRET VITE_FIREBASE_WEB_API_KEY; do
+            if [[ -z "${!name:-}" ]]; then
+              missing="$missing $name"
+            fi
+          done
+          if [[ -n "$missing" ]]; then
+            echo "::warning::Missing Google native OAuth env ($missing) — desktop builds will fall back to the embedded auth-window relay instead of the system browser."
+          fi
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -456,6 +473,11 @@ jobs:
           # (The debug channel — API-key login only — is built via
           # `pnpm build:debug`, e.g. for throwaway test builds.)
           VITE_BUILD_CHANNEL: official
+          # Native Google sign-in (RFC 8252 loopback via system browser).
+          # Without these, login-page falls back to the embedded WebView relay.
+          VITE_GOOGLE_DESKTOP_CLIENT_ID: ${{ vars.VITE_GOOGLE_DESKTOP_CLIENT_ID || secrets.VITE_GOOGLE_DESKTOP_CLIENT_ID }}
+          VITE_GOOGLE_DESKTOP_CLIENT_SECRET: ${{ secrets.VITE_GOOGLE_DESKTOP_CLIENT_SECRET }}
+          VITE_FIREBASE_WEB_API_KEY: ${{ vars.VITE_FIREBASE_WEB_API_KEY || secrets.VITE_FIREBASE_WEB_API_KEY }}
           # Keep on-demand runtimes attached to the exact release, including beta tags.
           LYNSE_RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
           # audiopus_sys (opus codec) vendors a CMakeLists.txt with an old

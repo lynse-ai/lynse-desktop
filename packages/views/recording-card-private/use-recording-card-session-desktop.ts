@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { toast } from "sonner";
-import { fetchRecordingCardConfig } from "./credentials";
 import { recordingCardDisplayName } from "./file-name";
 import { getRecordingCardAccess, ownershipErrorKey, requireRecordingCardAccess } from "./ownership";
 import {
@@ -158,14 +157,7 @@ export function useRecordingCardSessionDesktop(): RecordingCardSessionView {
         const access = getRecordingCardAccess();
         requireRecordingCardAccess(access);
         if (!mountedRef.current || generationRef.current !== generation) return;
-        const config = await fetchRecordingCardConfig();
-        if (!mountedRef.current || generationRef.current !== generation) return;
-        requireRecordingCardAccess(access);
-        const result: RecordingCardConnectResult = await api.connect(
-          config.password,
-          config.vendorId,
-          config.productId,
-        );
+        const result: RecordingCardConnectResult = await api.connect();
         if (!mountedRef.current || generationRef.current !== generation) return;
         requireRecordingCardAccess(access);
         setDeviceName(
@@ -178,8 +170,10 @@ export function useRecordingCardSessionDesktop(): RecordingCardSessionView {
         await Promise.all([refreshFiles(), refreshSettings()]);
       } catch (err) {
         if (!mountedRef.current || generationRef.current !== generation) return;
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn("[recording-card] desktop connect failed:", message);
         setPhase("error");
-        setErrorMessage(err instanceof Error ? err.message : String(err));
+        setErrorMessage(message);
         void teardown();
       }
     },

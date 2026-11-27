@@ -9,7 +9,7 @@ import {
   openAppUpdateDialog,
   useAppUpdate,
 } from "../app-update";
-import { openLogsFolder, openReportProblem } from "../diagnostics";
+import { openLogsFolder } from "../diagnostics";
 import { LYNSE_APP_ICON_SRC } from "./app-icon";
 import { WEBSITE_URL, privacyUrl, termsUrl } from "./links";
 
@@ -34,16 +34,9 @@ function openInBrowser(url: string): void {
  * The About panel body: app icon, name, version, update entry, legal links
  * and copyright — mirroring the classic native About window layout. Rendered
  * inside the standalone desktop window (`AboutWindow`) and the web fallback
- * dialog (`AboutDialog`); the parent supplies the height. When embedded in
- * the settings dialog the parent passes `onOpenReportProblem`, which closes
- * the settings dialog first — the report screenshot must not photograph it.
+ * dialog (`AboutDialog`); the parent supplies the height.
  */
-export function AboutContent({
-  onOpenReportProblem,
-}: {
-  /** Override for the 报告问题 entry; defaults to the shared report dialog. */
-  onOpenReportProblem?: () => void;
-} = {}) {
+export function AboutContent() {
   const { t, i18n } = useTranslation();
   // Subscribing also keeps the update entry in sync with the shared 30-min
   // background check, so "update available" shows without a manual check.
@@ -116,17 +109,10 @@ export function AboutContent({
         ))}
       </div>
 
-      {/* Diagnostics shortcuts carried over from the old settings About card.
+      {/* Diagnostics shortcut carried over from the old settings About card.
           The log folder needs the desktop host, so it hides on web. */}
-      <div className="mt-2.5 flex items-center gap-4 text-2xs text-muted-foreground/80">
-        <button
-          type="button"
-          onClick={onOpenReportProblem ?? openReportProblem}
-          className="transition-colors hover:text-foreground"
-        >
-          {t("settings.report_issue")}
-        </button>
-        {isDesktop && (
+      {isDesktop && (
+        <div className="mt-2.5 text-2xs text-muted-foreground/80">
           <button
             type="button"
             onClick={openLogsFolder}
@@ -134,8 +120,8 @@ export function AboutContent({
           >
             {t("settings.open_logs_folder")}
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Copyright block pinned to the bottom like a native About panel. */}
       <div className="mt-auto flex flex-col items-center gap-1.5 pt-6">

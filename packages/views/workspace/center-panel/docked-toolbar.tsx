@@ -40,7 +40,7 @@ interface DockedMarkdownToolbarProps {
  * toolbar these open ABOVE the pill; they render through a portal with fixed
  * coordinates so the bar's own layout never clips them.
  */
-type OpenPopover = "link" | "image" | "ai" | null;
+type OpenPopover = "link" | "image" | "ai" | "heading" | "list" | null;
 
 /** Live snapshot of the editor state used for active-button highlighting and
  *  AI/link enablement. */
@@ -58,12 +58,24 @@ const EMPTY_SNAPSHOT: EditorSnapshot = { block: "", marks: [], hasSelection: fal
 /** Vertical gap between a bottom-bar trigger and its popover panel above it. */
 const POPOVER_GAP = 8;
 
+const HEADING_OPTIONS = [
+  { block: "paragraph", action: "paragraph", icon: Type, labelKey: "toolbar.paragraph" },
+  { block: "heading-1", action: "heading-1", icon: Heading1, labelKey: "toolbar.heading_1" },
+  { block: "heading-2", action: "heading-2", icon: Heading2, labelKey: "toolbar.heading_2" },
+  { block: "heading-3", action: "heading-3", icon: Heading3, labelKey: "toolbar.heading_3" },
+] as const;
+
+const LIST_OPTIONS = [
+  { block: "bullet-list", action: "bullet-list", icon: List, labelKey: "toolbar.bullet_list" },
+  { block: "ordered-list", action: "ordered-list", icon: ListOrdered, labelKey: "toolbar.ordered_list" },
+  { block: "task-list", action: "task-list", icon: ListChecks, labelKey: "toolbar.task_list" },
+] as const;
+
 /**
  * Always-visible horizontal Markdown toolbar floating at the bottom of the
- * editing column. Replaces the selection-gated floating bar: every tool stays
- * reachable while the user reads or scrolls, and the full toolset renders at
- * once (desktop windows are large — nothing collapses into submenus except
- * URL/AI popovers, which would be too wide for the pill itself).
+ * editing column. Mutually-exclusive block/list families (headings and lists)
+ * plus URL/AI panels collapse into upward popovers so the pill stays compact
+ * and centered even when side panels narrow the editor column.
  *
  * The pill is bottom-`sticky` within the editing column, so it hovers over the
  * scrollport while the document scrolls and settles below the last paragraph
@@ -84,6 +96,8 @@ export function DockedMarkdownToolbar({ editor }: DockedMarkdownToolbarProps) {
     link: null,
     image: null,
     ai: null,
+    heading: null,
+    list: null,
   });
 
   // ── Selection + active-state tracking ──────────────────────
@@ -245,6 +259,10 @@ export function DockedMarkdownToolbar({ editor }: DockedMarkdownToolbarProps) {
   const active = (block: string) => snapshot.block === block;
   const markActive = (name: string) => snapshot.marks.includes(name);
   const hasSelection = snapshot.hasSelection;
+  const activeHeading = HEADING_OPTIONS.find((opt) => opt.block === snapshot.block);
+  const ActiveHeadingIcon = activeHeading?.icon ?? Type;
+  const activeList = LIST_OPTIONS.find((opt) => opt.block === snapshot.block);
+  const ActiveListIcon = activeList?.icon ?? List;
 
   if (!editor) {
     return null;
@@ -258,7 +276,7 @@ export function DockedMarkdownToolbar({ editor }: DockedMarkdownToolbarProps) {
         // note body scrolls past — "browse and edit at the same time" is the
         // whole point — and it settles below the last paragraph once the end
         // of the content scrolls into view.
-        className="floating-toolbar glass-overlay sticky bottom-3 z-20 flex shrink-0 items-center gap-0.5 self-center rounded-full border border-border/30 px-1.5 py-1"
+        className="floating-toolbar glass-overlay sticky bottom-3 z-20 flex max-w-full shrink-0 items-center gap-0.5 self-center overflow-x-auto rounded-full px-1.5 py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
         {/* ── AI selection actions — pinned first: the most-used tool sits at
            the head of the pill ── */}
@@ -273,21 +291,15 @@ export function DockedMarkdownToolbar({ editor }: DockedMarkdownToolbarProps) {
 
         <RailDivider />
 
-        {/* ── Block types ── */}
-        <RailButton label={t("toolbar.paragraph")} active={active("paragraph")} onClick={() => run("paragraph")}>
-          <Type className="size-3.5" />
+        {/* ── Block / heading picker ── */}
+        <RailButton
+          label={activeHeading ? t(activeHeading.labelKey) : t("toolbar.paragraph")}
+          active={snapshot.block.startsWith("heading-")}
+          onClick={() => togglePopover("heading")}
+          triggerRef={(el) => { triggerRefs.current.heading = el; }}
+        >
+          <ActiveHeadingIcon className="size-3.5" />
         </RailButton>
-        <RailButton label={t("toolbar.heading_1")} active={active("heading-1")} onClick={() => run("heading-1")}>
-          <Heading1 className="size-3.5" />
-        </RailButton>
-        <RailButton label={t("toolbar.heading_2")} active={active("heading-2")} onClick={() => run("heading-2")}>
-          <Heading2 className="size-3.5" />
-        </RailButton>
-        <RailButton label={t("toolbar.heading_3")} active={active("heading-3")} onClick={() => run("heading-3")}>
-          <Heading3 className="size-3.5" />
-        </RailButton>
-
-        <RailDivider />
 
         {/* ── Inline marks ── */}
         <RailButton label={t("toolbar.bold")} active={markActive("strong")} onClick={() => run("bold")}>
@@ -314,30 +326,21 @@ export function DockedMarkdownToolbar({ editor }: DockedMarkdownToolbarProps) {
 
         <RailDivider />
 
-        {/* ── Lists ── */}
-        <RailButton label={t("toolbar.bullet_list")} active={active("bullet-list")} onClick={() => run("bullet-list")}>
-          <List className="size-3.5" />
+        {/* ── Lists & blocks ── */}
+        <RailButton
+          label={activeList ? t(activeList.labelKey) : t("toolbar.bullet_list")}
+          active={Boolean(activeList)}
+          onClick={() => togglePopover("list")}
+          triggerRef={(el) => { triggerRefs.current.list = el; }}
+        >
+          <ActiveListIcon className="size-3.5" />
         </RailButton>
-        <RailButton label={t("toolbar.ordered_list")} active={active("ordered-list")} onClick={() => run("ordered-list")}>
-          <ListOrdered className="size-3.5" />
-        </RailButton>
-        <RailButton label={t("toolbar.task_list")} active={active("task-list")} onClick={() => run("task-list")}>
-          <ListChecks className="size-3.5" />
-        </RailButton>
-
-        <RailDivider />
-
-        {/* ── Blocks ── */}
         <RailButton label={t("toolbar.blockquote")} active={active("blockquote")} onClick={() => run("blockquote")}>
           <Quote className="size-3.5" />
         </RailButton>
         <RailButton label={t("toolbar.horizontal_rule")} onClick={() => run("horizontal-rule")}>
           <Minus className="size-3.5" />
         </RailButton>
-
-        <RailDivider />
-
-        {/* ── Insert / history ── */}
         <RailButton
           label={t("toolbar.insert_image")}
           onClick={() => togglePopover("image")}
@@ -348,17 +351,23 @@ export function DockedMarkdownToolbar({ editor }: DockedMarkdownToolbarProps) {
 
         <RailDivider />
 
-        {/* Undo/redo share one group row so the pill stays within narrow panes. */}
-        <div className="flex items-center gap-0.5">
-          <RailButton label={t("toolbar.undo")} onClick={() => run("undo")}>
-            <Undo className="size-3.5" />
-          </RailButton>
-          <RailButton label={t("toolbar.redo")} onClick={() => run("redo")}>
-            <Redo2 className="size-3.5" />
-          </RailButton>
-        </div>
+        <RailButton label={t("toolbar.undo")} onClick={() => run("undo")}>
+          <Undo className="size-3.5" />
+        </RailButton>
+        <RailButton label={t("toolbar.redo")} onClick={() => run("redo")}>
+          <Redo2 className="size-3.5" />
+        </RailButton>
       </div>
 
+      {(openPopover === "heading" || openPopover === "list") && (
+        <ToolbarPopover anchor={popoverAnchor}>
+          <BlockOptionMenu
+            options={openPopover === "heading" ? HEADING_OPTIONS : LIST_OPTIONS}
+            isActive={active}
+            onSelect={(action) => run(action)}
+          />
+        </ToolbarPopover>
+      )}
       {openPopover === "link" && (
         <ToolbarPopover anchor={popoverAnchor}>
           <LinkForm
@@ -400,6 +409,47 @@ export function DockedMarkdownToolbar({ editor }: DockedMarkdownToolbarProps) {
 
 // ── Rail primitives ─────────────────────────────────────────
 
+/** Popover list for grouped block/list options above the toolbar. */
+function BlockOptionMenu({
+  options,
+  isActive,
+  onSelect,
+}: {
+  options: readonly {
+    block: string;
+    action: MarkdownEditorAction;
+    icon: React.ComponentType<{ className?: string }>;
+    labelKey: string;
+  }[];
+  isActive: (block: string) => boolean;
+  onSelect: (action: MarkdownEditorAction) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-col items-stretch rounded-lg border border-border/30 glass-overlay p-1.5 whitespace-nowrap">
+      {options.map((opt) => {
+        const Icon = opt.icon;
+        return (
+          <button
+            key={opt.action}
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => onSelect(opt.action)}
+            className={`flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs transition-colors ${
+              isActive(opt.block)
+                ? "bg-accent text-accent-foreground"
+                : "text-foreground hover:bg-accent/60"
+            }`}
+          >
+            <Icon className="size-3.5 shrink-0" />
+            {t(opt.labelKey)}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 /** Icon button on the pill. Clicks never steal focus from the editor. */
 function RailButton({
   label,
@@ -429,7 +479,7 @@ function RailButton({
       disabled={disabled}
       onClick={onClick}
       onMouseDown={(e) => e.preventDefault()}
-      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors ${
+      className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors ${
         active
           ? "bg-accent text-accent-foreground"
           : "text-muted-foreground hover:bg-muted hover:text-foreground"

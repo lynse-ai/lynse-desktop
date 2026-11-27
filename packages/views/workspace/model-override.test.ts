@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MODEL_OVERRIDE_STORAGE_KEY,
   fetchModelPresets,
+  flattenPresetModels,
   isHttpUrl,
   loadChatModelSetting,
   parseChatModelSetting,
@@ -185,5 +186,31 @@ describe("fetchModelPresets", () => {
   it("propagates request failures to the caller", async () => {
     apiMocks.get.mockRejectedValue(new Error("503"));
     await expect(fetchModelPresets()).rejects.toThrow("503");
+  });
+});
+
+describe("flattenPresetModels", () => {
+  it("flattens models across presets and keeps the first preset for duplicate model names", () => {
+    const first = {
+      id: "deepseek-official",
+      label: "DeepSeek 官方",
+      baseUrl: "https://api.deepseek.com",
+      models: ["deepseek-flash", "deepseek-chat"],
+      defaultModel: "deepseek-flash",
+      requiresApiKey: false,
+    };
+    const second = {
+      id: "maas",
+      label: "秒云 MaaS",
+      baseUrl: "https://maas.example.com",
+      models: ["deepseek-chat", "qwen-max"],
+      defaultModel: "deepseek-chat",
+      requiresApiKey: false,
+    };
+    expect(flattenPresetModels([first, second])).toEqual([
+      { model: "deepseek-flash", preset: first },
+      { model: "deepseek-chat", preset: first },
+      { model: "qwen-max", preset: second },
+    ]);
   });
 });

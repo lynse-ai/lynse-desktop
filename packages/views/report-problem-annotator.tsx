@@ -30,8 +30,9 @@ const INK = [
 ] as const;
 
 const ZOOM_MAX = 8;
+const TEXT_DISPLAY_PX = 18;
 const TEXT_FONT =
-  '600 ui-sans-serif, system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif';
+  'ui-sans-serif, system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif';
 
 /** Clamp to [1, ZOOM_MAX], snapping off float drift from ×1.25/×0.8 chains. */
 function clampZoom(value: number): number {
@@ -46,11 +47,11 @@ function strokeWidthFor(natural: Size): number {
 
 /**
  * Annotation text size in natural pixels for the current display scale, so
- * it reads at ~16 CSS px on screen while staying proportional in the saved
+ * it reads at ~18 CSS px on screen while staying proportional in the saved
  * JPEG.
  */
 function textNaturalSize(totalScale: number): number {
-  return Math.max(18, Math.round(16 / Math.max(totalScale, 0.05)));
+  return Math.max(18, Math.round(TEXT_DISPLAY_PX / Math.max(totalScale, 0.05)));
 }
 
 function drawStroke(ctx: CanvasRenderingContext2D, stroke: Stroke): void {
@@ -548,8 +549,8 @@ export function ReportProblemAnnotator({
                     left: textDraft.x * totalScale,
                     top: textDraft.y * totalScale,
                     color: textDraft.color,
-                    font: `600 16px ${TEXT_FONT}`,
-                    width: Math.max(measureText(canvasRef.current, `${textDraft.value} `, 16) + 8, 64),
+                    font: `600 ${TEXT_DISPLAY_PX}px ${TEXT_FONT}`,
+                    width: Math.max(measureText(canvasRef.current, `${textDraft.value} `, TEXT_DISPLAY_PX) + 8, 64),
                   }}
                   className="border-b border-white/40 bg-transparent p-0 outline-none placeholder:text-white/40"
                 />

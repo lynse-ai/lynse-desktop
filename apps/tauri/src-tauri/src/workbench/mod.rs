@@ -1556,10 +1556,14 @@ pub async fn workbench_remove_source(
     }
     sync::forget_source(&mut manifest, &actual);
     persist(&app, &session, &manifest)?;
-    let (root, _) = roots(&app, &session)?;
-    store::remove_document(&root, &actual, manifest.entries.get(&actual))?;
-    fulltext::remove_document(&root, &actual);
+    // Skip local vault file cleanup when no knowledge-base folder is configured
+    // on this machine; manifest tombstones and cloud-side records still clear.
+    if let Ok((root, _)) = roots(&app, &session) {
+        store::remove_document(&root, &actual, manifest.entries.get(&actual))?;
+        fulltext::remove_document(&root, &actual);
+    }
     manifest.entries.remove(&actual);
+    manifest.knowledge_uploads.remove(&actual);
     persist(&app, &session, &manifest)?;
     drop(_guard);
     if crate::vault::load_vault_config(&app)?.enabled {

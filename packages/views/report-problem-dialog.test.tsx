@@ -333,6 +333,47 @@ describe("problem report screenshot annotation", () => {
     await waitFor(() => expect(mocks.annotate).toHaveBeenCalledWith(screenshot.path, "data:image/png;base64,QUJD"));
   });
 
+  it("draws text marks with a valid scaled canvas font instead of falling back to 10px", async () => {
+    const fonts: string[] = [];
+    const fillCalls: string[] = [];
+    let currentFont = "10px sans-serif";
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => ({
+      clearRect: vi.fn(),
+      beginPath: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      stroke: vi.fn(),
+      fill: vi.fn(),
+      arc: vi.fn(),
+      quadraticCurveTo: vi.fn(),
+      measureText: (text: string) => ({ width: text.length * 10 }),
+      fillText: (text: string) => {
+        fillCalls.push(text);
+        fonts.push(currentFont);
+      },
+      set font(value: string) {
+        currentFont = value;
+      },
+      get font() {
+        return currentFont;
+      },
+    }) as unknown as CanvasRenderingContext2D);
+
+    await openDialogForm();
+    const { canvas } = await openEditor();
+    fireEvent.click(screen.getByTestId("report-annotator-text"));
+    fireEvent.pointerDown(canvas, { button: 0, pointerId: 1, clientX: 200, clientY: 100 });
+    const input = await screen.findByRole("textbox");
+    fireEvent.change(input, { target: { value: "1243" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(fillCalls).toContain("1243");
+    const fontUsed = fonts[fonts.length - 1] ?? "";
+    expect(fontUsed).toMatch(/^600 \d+px ui-sans-serif,/);
+    expect(fontUsed).not.toMatch(/\d+px 600 /);
+    expect(Number(fontUsed.match(/^600 (\d+)px/)?.[1] ?? 0)).toBeGreaterThanOrEqual(18);
+  });
+
   it("erases whole marks it touches and spares the rest", async () => {
     await openDialogForm();
     const { canvas } = await openEditor();

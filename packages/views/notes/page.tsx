@@ -440,8 +440,8 @@ export function NotesPage() {
         clearFileSelection();
         setPendingDeleteIds(null);
       },
-      onError: (error) => {
-        toast.error(t("workspace.delete_failed", { error: error.message }));
+      onError: (error: unknown) => {
+        toast.error(t("workspace.delete_failed", { error: error instanceof Error ? error.message : String(error) }));
         setPendingDeleteIds(null);
       },
     });

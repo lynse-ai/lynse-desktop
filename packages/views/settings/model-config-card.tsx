@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@lynse/ui/components/ui/card";
 import { Label } from "@lynse/ui/components/ui/label";
 import { Input } from "@lynse/ui/components/ui/input";
@@ -14,6 +14,7 @@ import {
 import { useTranslation } from "@lynse/core/i18n/react";
 import {
   fetchModelPresets,
+  flattenPresetModels,
   isHttpUrl,
   loadChatModelSetting,
   saveChatModelSetting,
@@ -27,9 +28,10 @@ type ModelMode = ChatModelSetting["mode"];
 
 /**
  * Model picker for the lynclaw chat turns (per-request `modelOverride`).
- * "default" sends no override; "preset" picks from the served preset list;
- * "custom" points at any OpenAI-compatible endpoint. Changes persist locally
- * and land on the next sent message — nothing is written server-side.
+ * "default" sends no override; "preset" picks a served model directly by name
+ * (the serving preset stays hidden plumbing); "custom" points at any
+ * OpenAI-compatible endpoint. Changes persist locally and land on the next
+ * sent message — nothing is written server-side.
  */
 export function ModelConfigCard() {
   const { t } = useTranslation();
@@ -41,6 +43,10 @@ export function ModelConfigCard() {
   const [presets, setPresets] = useState<ModelPreset[] | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const modeRef = useRef<ModelMode>(mode);
+  const presetModelRef = useRef(presetModel);
+  modeRef.current = mode;
+  presetModelRef.current = presetModel;
 
   useEffect(() => {
     const stored = loadChatModelSetting();
@@ -61,6 +67,7 @@ export function ModelConfigCard() {
       .then((list) => {
         if (!active) return;
         setPresets(list);
+        const flattened = flattenPresetModels(list);
         // Judge against the persisted setting, not component state — the user
         // may have changed things while the request was in flight. A preset
         // that vanished server-side falls back to the default model rather
@@ -68,7 +75,23 @@ export function ModelConfigCard() {
         const stored = loadChatModelSetting();
         if (stored.mode === "preset" && !list.some((p) => p.id === stored.presetId)) {
           setMode("default");
+          setPresetId("");
+          setPresetModel("");
           saveChatModelSetting({ mode: "default" });
+          return;
+        }
+        // If the user switched to built-in mode while presets were still
+        // loading, bind the first available model now.
+        if (modeRef.current === "preset" && !presetModelRef.current && flattened[0]) {
+          const first = flattened[0];
+          setPresetId(first.preset.id);
+          setPresetModel(first.model);
+          setPresetApiKey("");
+          if (first.preset.requiresApiKey) {
+            setError(t("settings.model_preset_key_required"));
+          } else {
+            saveChatModelSetting({ mode: "preset", presetId: first.preset.id, model: first.model });
+          }
         }
       })
       .catch(() => {
@@ -77,9 +100,30 @@ export function ModelConfigCard() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [t]);
 
-  const preset = presets?.find((p) => p.id === presetId) ?? null;
+  const servedModels = flattenPresetModels(presets ?? []);
+  const selectedEntry =
+    servedModels.find((entry) => entry.model === presetModel && (!presetId || entry.preset.id === presetId)) ??
+    servedModels.find((entry) => entry.model === presetModel) ??
+    null;
+
+  function applyPresetModel(entry: { model: string; preset: ModelPreset }, apiKey: string) {
+    setPresetId(entry.preset.id);
+    setPresetModel(entry.model);
+    const trimmedKey = apiKey.trim();
+    if (entry.preset.requiresApiKey && !trimmedKey) {
+      setError(t("settings.model_preset_key_required"));
+      return;
+    }
+    setError(null);
+    saveChatModelSetting({
+      mode: "preset",
+      presetId: entry.preset.id,
+      model: entry.model,
+      ...(trimmedKey ? { apiKey: trimmedKey } : {}),
+    });
+  }
 
   function switchMode(next: ModelMode) {
     setMode(next);
@@ -89,55 +133,31 @@ export function ModelConfigCard() {
       return;
     }
     if (next === "preset") {
-      const target = preset ?? presets?.[0] ?? null;
+      const target = selectedEntry ?? servedModels[0] ?? null;
       if (target) {
-        setPresetId(target.id);
-        setPresetModel(target.defaultModel);
         setPresetApiKey("");
-        saveChatModelSetting({ mode: "preset", presetId: target.id, model: target.defaultModel });
+        applyPresetModel(target, "");
       }
       // No list yet (still loading / failed): keep the draft local; the
-      // preset select below surfaces the state and nothing is persisted
-      // until a preset is actually chosen.
+      // model select below surfaces the state and nothing is persisted
+      // until a model is actually resolved.
       return;
     }
     // "custom": keep whatever is typed; persistence happens per keystroke
     // once the three fields validate (see updateCustom).
   }
 
-  function choosePreset(id: string | null) {
-    const target = presets?.find((p) => p.id === id);
-    if (!target) return;
-    setPresetId(id!);
-    setPresetModel(target.defaultModel);
-    setPresetApiKey("");
-    setError(null);
-    saveChatModelSetting({ mode: "preset", presetId: id!, model: target.defaultModel });
-  }
-
   function choosePresetModel(model: string | null) {
-    if (!model || !preset) return;
-    setPresetModel(model);
-    setError(null);
-    saveChatModelSetting({ mode: "preset", presetId: preset.id, model, apiKey: presetApiKey || undefined });
+    const entry = servedModels.find((item) => item.model === model);
+    if (!entry) return;
+    setPresetApiKey("");
+    applyPresetModel(entry, "");
   }
 
   function updatePresetApiKey(value: string) {
     setPresetApiKey(value);
-    setError(null);
-    if (!preset) return;
-    // requiresApiKey presets have no server credential — an empty key would
-    // 400 every turn, so hold persistence until one is filled in.
-    if (preset.requiresApiKey && !value.trim()) {
-      setError(t("settings.model_preset_key_required"));
-      return;
-    }
-    saveChatModelSetting({
-      mode: "preset",
-      presetId: preset.id,
-      model: presetModel,
-      apiKey: value.trim() || undefined,
-    });
+    if (!selectedEntry) return;
+    applyPresetModel(selectedEntry, value);
   }
 
   function updateCustom(patch: Partial<typeof custom>) {
@@ -202,22 +222,21 @@ export function ModelConfigCard() {
         {mode === "preset" && (
           <>
             <div className="space-y-1.5">
-              <Label htmlFor="model-preset" className="text-xs text-muted-foreground">
-                {t("settings.model_preset_label")}
+              <Label htmlFor="model-preset-model" className="text-xs text-muted-foreground">
+                {t("settings.model_model_label")}
               </Label>
               <Select
-                value={presetId}
-                items={Object.fromEntries((presets ?? []).map((p) => [p.id, p.label]))}
-                onValueChange={choosePreset}
-                disabled={!presets}
+                value={presetModel}
+                onValueChange={choosePresetModel}
+                disabled={!presets || servedModels.length === 0}
               >
-                <SelectTrigger id="model-preset" className="h-9 text-xs">
-                  <SelectValue placeholder={presets ? t("settings.model_preset_label") : t("settings.model_presets_loading")} />
+                <SelectTrigger id="model-preset-model" className="h-9 text-xs">
+                  <SelectValue placeholder={presets ? t("settings.model_model_label") : t("settings.model_presets_loading")} />
                 </SelectTrigger>
                 <SelectContent>
-                  {(presets ?? []).map((p) => (
-                    <SelectItem key={p.id} value={p.id}>
-                      {p.label}
+                  {servedModels.map(({ model }) => (
+                    <SelectItem key={model} value={model}>
+                      {model}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -227,46 +246,24 @@ export function ModelConfigCard() {
                   {t("settings.model_presets_failed")}
                 </p>
               )}
-              {preset?.note && <p className="text-2xs text-muted-foreground">{preset.note}</p>}
             </div>
 
-            {preset && (
-              <>
-                <div className="space-y-1.5">
-                  <Label htmlFor="model-preset-model" className="text-xs text-muted-foreground">
-                    {t("settings.model_model_label")}
-                  </Label>
-                  <Select value={presetModel} onValueChange={choosePresetModel}>
-                    <SelectTrigger id="model-preset-model" className="h-9 text-xs">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {preset.models.map((m) => (
-                        <SelectItem key={m} value={m}>
-                          {m}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                {preset.requiresApiKey && (
-                  <div className="space-y-1.5">
-                    <Label htmlFor="model-preset-key" className="text-xs text-muted-foreground">
-                      {t("settings.model_api_key_label")}
-                    </Label>
-                    <Input
-                      id="model-preset-key"
-                      type="password"
-                      autoComplete="off"
-                      spellCheck={false}
-                      className="h-9 text-xs"
-                      value={presetApiKey}
-                      onChange={(e) => updatePresetApiKey(e.target.value)}
-                    />
-                    <p className="text-2xs text-muted-foreground">{t("settings.model_api_key_hint")}</p>
-                  </div>
-                )}
-              </>
+            {selectedEntry?.preset.requiresApiKey && (
+              <div className="space-y-1.5">
+                <Label htmlFor="model-preset-key" className="text-xs text-muted-foreground">
+                  {t("settings.model_api_key_label")}
+                </Label>
+                <Input
+                  id="model-preset-key"
+                  type="password"
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="h-9 text-xs"
+                  value={presetApiKey}
+                  onChange={(e) => updatePresetApiKey(e.target.value)}
+                />
+                <p className="text-2xs text-muted-foreground">{t("settings.model_api_key_hint")}</p>
+              </div>
             )}
           </>
         )}

@@ -22,6 +22,7 @@ import {
   ChevronRight,
   Clock,
   Download,
+  HardDrive,
   Loader2,
   RefreshCw,
   Search,
@@ -320,7 +321,10 @@ export function DeviceFiles({
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-xs font-medium">{recordingCardDisplayName(file)}</p>
                   <p className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <span>{formatBytes(file.size)}</span>
+                    <span className="inline-flex items-center gap-1">
+                      <HardDrive className="size-3 shrink-0" aria-hidden="true" />
+                      <span>{formatBytes(file.size)}</span>
+                    </span>
                     <FileDuration
                       file={file}
                       durationLabel={(value) => t("recordingCard.duration", { duration: value })}

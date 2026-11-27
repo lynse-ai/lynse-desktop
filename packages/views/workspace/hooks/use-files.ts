@@ -715,10 +715,14 @@ export function useDeleteWorkspaceFiles() {
   return useMutation({
     mutationFn: async (fileIds: string[]) => {
       const localApi = getDesktopLocalTranscriptionApi();
+      const authenticated = getAuthStore()?.getState().isAuthenticated ?? false;
       const cloudIds: string[] = [];
+      const linkedCloudIds: string[] = [];
       for (const id of fileIds) {
         if (isLocalFileId(id)) {
           if (!localApi) throw new Error("local transcription bridge unavailable");
+          const localRecord = authenticated ? await localApi.get(id).catch(() => null) : null;
+          if (localRecord?.cloudFileId) linkedCloudIds.push(localRecord.cloudFileId);
           await localApi.delete(id);
         } else {
           cloudIds.push(id);
@@ -730,8 +734,15 @@ export function useDeleteWorkspaceFiles() {
         // side no-ops while the vault is disabled.
         void removeNotesFromVault(cloudIds);
       }
+      if (linkedCloudIds.length > 0) {
+        // Local recordings with a linked cloudFileId (e.g. interrupted upload)
+        // may or may not have landed on the server yet — remove best-effort.
+        await deleteCloud.mutateAsync(linkedCloudIds).catch(() => {});
+      }
       const workbench = getWorkbenchApi();
-      if (workbench) await Promise.all(fileIds.map((id) => workbench.removeSource(id)));
+      if (workbench && authenticated) {
+        await Promise.all(fileIds.map((id) => workbench.removeSource(id)));
+      }
       // Best-effort: legacy Lynclaw summary notes attached to the deleted
       // files (the standalone-note era) have no server cascade — drop the
       // local rows so they never resurface as orphans.

@@ -20,6 +20,7 @@ import { Label } from "@lynse/ui/components/ui/label";
 import { useTranslation } from "@lynse/core/i18n/react";
 import {
   fetchModelPresets,
+  flattenPresetModels,
   isHttpUrl,
   loadChatModelSetting,
   saveChatModelSetting,
@@ -120,16 +121,7 @@ export function ChatModelPicker() {
   const triggerLabel =
     setting.mode === "default" ? t("chat.model_picker_default") : setting.model;
 
-  // Served models flattened across presets, deduped by id (first preset wins) —
-  // the serving preset is plumbing the user does not see.
-  const servedModels: { model: string; presetId: string }[] = [];
-  for (const preset of presets ?? []) {
-    for (const model of preset.models) {
-      if (!servedModels.some((entry) => entry.model === model)) {
-        servedModels.push({ model, presetId: preset.id });
-      }
-    }
-  }
+  const servedModels = flattenPresetModels(presets ?? []);
 
   return (
     <>

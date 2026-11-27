@@ -116,6 +116,7 @@ vi.mock("../layout/app-title-bar", () => ({
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   chat.isLoading = false;
   chat.messages = [];
   chat.conversations = [];
@@ -141,6 +142,41 @@ afterEach(() => {
 });
 
 describe("ChatPage", () => {
+  it("opens the default email app only when the user clicks the support address", () => {
+    const openExternal = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("desktopAPI", { openExternal });
+    chat.messages = [{
+      id: "support-reply",
+      role: "assistant",
+      content: "Please email Lynse Support using the address below.",
+      timestamp: Date.now(),
+      humanSupportLink: { url: "mailto:support@lynse.ai", label: "support@lynse.ai" },
+    }];
+    render(<ChatPage />);
+
+    const link = screen.getByRole("link", { name: "support@lynse.ai" });
+    expect(link.getAttribute("href")).toBe("mailto:support@lynse.ai");
+    expect(link.hasAttribute("target")).toBe(false);
+    expect(openExternal).not.toHaveBeenCalled();
+    fireEvent.click(link);
+    expect(openExternal).toHaveBeenCalledExactlyOnceWith("mailto:support@lynse.ai");
+  });
+
+  it("leaves the web support email link available to the browser", () => {
+    chat.messages = [{
+      id: "support-reply",
+      role: "assistant",
+      content: "Please email Lynse Support using the address below.",
+      timestamp: Date.now(),
+      humanSupportLink: { url: "mailto:support@lynse.ai" },
+    }];
+    render(<ChatPage />);
+
+    const link = screen.getByRole("link", { name: "support@lynse.ai" });
+    expect(link.getAttribute("href")).toBe("mailto:support@lynse.ai");
+    expect(link.hasAttribute("target")).toBe(false);
+  });
+
   it("hands waiting feedback over to reasoning and retires it when the turn finishes", () => {
     const message = { id: "a1", role: "assistant", content: "", timestamp: Date.now() };
     chat.messages = [message];

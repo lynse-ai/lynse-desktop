@@ -11,8 +11,6 @@ import { useTranslation } from "@lynse/core/i18n/react";
 
 import { getWorkspaceState, useWorkspaceStore } from "../store";
 import { useChat } from "../hooks/use-chat";
-import { ChatModelPicker } from "../model-picker";
-import { isBetaFeaturesUnlocked } from "../../feature-flags";
 import { useChatStore } from "../hooks/use-chat-store";
 import { ChatActivity } from "../../chat/chat-activity";
 import { useFiles } from "../hooks/use-files";
@@ -375,8 +373,6 @@ export function ChatPanel() {
               className="h-8 text-xs"
             />
           </div>
-          {/* Beta surface: hidden in official builds (feature-flags). */}
-          {isBetaFeaturesUnlocked() && <ChatModelPicker />}
           {viewLoading ? (
             <Button size="icon" variant="destructive" className="size-8 shrink-0" onClick={stopStreaming} style={{ borderRadius: 8 }} title={t("chat.stop")}>
               <Square className="size-3.5 fill-current" />

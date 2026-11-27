@@ -40,7 +40,6 @@ import { BetaBadge } from "../beta-badge";
 import { getDesktopVaultApi } from "../workspace/note-vault";
 import { getDesktopWebdavSyncApi } from "./webdav-sync";
 import { AboutContent } from "../about/about-content";
-import { openReportProblem } from "../diagnostics";
 import { AccountCard } from "./account-card";
 import { UsageCard } from "./usage-card";
 import { StorageCard } from "./storage-card";
@@ -301,17 +300,7 @@ export function SettingsDialogContent({
     id: "about",
     label: t("layout.about"),
     icon: Info,
-    // The report screenshot must photograph the page beneath, not this
-    // dialog — close settings first, the report flow captures after the
-    // exit animation (see openReportDialog's pre-capture beat).
-    content: (
-      <AboutContent
-        onOpenReportProblem={() => {
-          onOpenChange(false);
-          openReportProblem();
-        }}
-      />
-    ),
+    content: <AboutContent />,
   });
 
   const activeSection =

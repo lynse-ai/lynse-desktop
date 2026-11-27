@@ -17,6 +17,7 @@ export {
   // ── Navigation / Sidebar ──────────────────────────────
   House,            // Home / 主页 feed
   Headphones,       // Recordings
+  Mail,             // Email support
   Mic,              // Microphone input
   Camera,           // iPhone photo capture (Continuity Camera)
   CalendarDays,     // Meetings

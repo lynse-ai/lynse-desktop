@@ -128,6 +128,23 @@ const GATEWAY_MODEL_PRESETS_PATH = "/api/business/ai/model/presets";
 const AGENT_MODEL_PRESETS_PATH = "/api/model/presets";
 
 /**
+ * Flatten built-in presets into unique model entries (first preset wins).
+ * Which provider/preset serves a model is backend plumbing the user does not
+ * need to pick.
+ */
+export function flattenPresetModels(presets: readonly ModelPreset[]): { model: string; preset: ModelPreset }[] {
+  const result: { model: string; preset: ModelPreset }[] = [];
+  for (const preset of presets) {
+    for (const model of preset.models) {
+      if (!result.some((entry) => entry.model === model)) {
+        result.push({ model, preset });
+      }
+    }
+  }
+  return result;
+}
+
+/**
  * Fetch the built-in preset list. Throws on network/auth failure — the
  * settings card renders the error and still allows the custom form; callers
  * must not hardcode a fallback list (the served list is the source of truth).

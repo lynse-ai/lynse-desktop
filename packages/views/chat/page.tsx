@@ -19,6 +19,7 @@ import {
   ListChecks,
   ListOrdered,
   Loader2,
+  Mail,
   Mic,
   NotePlus,
   Pencil,
@@ -1246,6 +1247,8 @@ function AssistantMessage({
   onPickFollowUp,
 }: AssistantMessageProps) {
   const { t } = useTranslation();
+  const supportUrl = message.humanSupportLink?.url;
+  const isSupportEmail = supportUrl === "mailto:support@lynse.ai";
   // The poll transport types the answer out itself; `revealedAt` only drives
   // the staggered entrance of attachments / support link after the text lands.
   const revealed = isFreshlyRevealed(message);
@@ -1447,17 +1450,27 @@ function AssistantMessage({
         {!!message.connectionRequests?.length && <ChatConnectionCards requests={message.connectionRequests} messageId={message.id} />}
       </div>
 
-      {message.humanSupportLink?.url && (
+      {supportUrl && (
         <a
-          href={message.humanSupportLink.url}
-          target="_blank"
+          href={supportUrl}
+          target={isSupportEmail ? undefined : "_blank"}
           rel="noreferrer"
+          onClick={isSupportEmail ? (event) => {
+            const desktop = (window as Window & {
+              desktopAPI?: { openExternal?: (url: string) => Promise<void> };
+            }).desktopAPI;
+            if (!desktop?.openExternal) return;
+            event.preventDefault();
+            void desktop.openExternal(supportUrl).catch(() => toast.error(t("chat.open_support_email_failed")));
+          } : undefined}
           className={`mt-2.5 inline-flex w-fit items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs text-foreground shadow-sm transition-colors hover:border-primary/30 hover:bg-accent ${
             revealed ? "animate-in fade-in duration-300 delay-[350ms] fill-mode-backwards" : ""
           }`}
         >
-          <Headphones className="size-3.5 shrink-0 text-primary/70" />
-          {message.humanSupportLink.label?.trim() || t("chat.contact_support")}
+          {isSupportEmail
+            ? <Mail className="size-3.5 shrink-0 text-primary/70" />
+            : <Headphones className="size-3.5 shrink-0 text-primary/70" />}
+          {isSupportEmail ? supportUrl.slice("mailto:".length) : message.humanSupportLink?.label?.trim() || t("chat.contact_support")}
         </a>
       )}
 

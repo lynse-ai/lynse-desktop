@@ -225,4 +225,11 @@ describe("ChatPanel", () => {
 
     expect(getByText("hello")).toBeTruthy();
   });
+
+  it("omits the model picker in the sidebar chat panel", () => {
+    window.localStorage.setItem("lynse_beta_features", "true");
+    getWorkspaceState().selectItem("meeting-a", "note", "Meeting A");
+    const view = renderChatPanel();
+    expect(view.queryByLabelText("chat.model_picker_label")).toBeNull();
+  });
 });

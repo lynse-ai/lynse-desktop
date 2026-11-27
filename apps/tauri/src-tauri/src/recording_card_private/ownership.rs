@@ -127,10 +127,6 @@ static CLIENT: LazyLock<Result<reqwest::Client, reqwest::Error>> = LazyLock::new
 pub struct CardAccess {
     pub api_base_url: String,
     pub token: String,
-    #[serde(default)]
-    pub gateway_url: Option<String>,
-    #[serde(default)]
-    pub agent_base_url: Option<String>,
 }
 
 pub struct CardCredential {
@@ -192,22 +188,6 @@ impl CardAccount {
         })
     }
 
-    pub(super) fn credential_gateway(&self, access: &CardAccess) -> String {
-        if let Some(agent) = &access.agent_base_url {
-            let trimmed = agent.trim().trim_end_matches('/');
-            if !trimmed.is_empty() {
-                return trimmed.to_string();
-            }
-        }
-        if let Some(gw) = &access.gateway_url {
-            let trimmed = gw.trim().trim_end_matches('/');
-            if !trimmed.is_empty() {
-                return trimmed.to_string();
-            }
-        }
-        "https://lynclaw-api-319577-10-1401959758.sh.run.tcloudbase.com".to_string()
-    }
-
     pub(super) fn mcp_origin(&self) -> &str {
         match self.gateway {
             "https://api.lynse.cn" | "https://gapp.lynse.cn" => "https://www.lynse.cn",
@@ -229,52 +209,6 @@ impl CardAccount {
         })?;
         token_header.set_sensitive(true);
         Ok(token_header)
-    }
-
-    /// Ensure the shared CloudBase assistant service knows which backend
-    /// gateway (`api.lynse.cn` vs `api-en.lynse.ai`) owns this session token.
-    async fn bind_agent_session(
-        &self,
-        client: &reqwest::Client,
-        gateway_origin: &str,
-        raw_token: &str,
-    ) {
-        if gateway_origin == self.gateway {
-            return;
-        }
-        let Ok(mut token_header) = HeaderValue::from_str(raw_token.trim()) else {
-            return;
-        };
-        token_header.set_sensitive(true);
-        let endpoint = format!("{gateway_origin}/api/session/backend");
-        match client
-            .post(&endpoint)
-            .header(AUTHORIZATION, token_header)
-            .header(CACHE_CONTROL, "no-cache, no-store")
-            .json(&serde_json::json!({ "host": self.gateway }))
-            .send()
-            .await
-        {
-            Ok(resp) if resp.status().is_success() => {
-                log::info!(
-                    "[recording-card] bound agent session backend to {}",
-                    self.gateway
-                );
-            }
-            Ok(resp) => {
-                log::warn!(
-                    "[recording-card] agent session bind to {} returned HTTP {}",
-                    self.gateway,
-                    resp.status().as_u16()
-                );
-            }
-            Err(err) => {
-                log::warn!(
-                    "[recording-card] agent session bind to {} failed: {err}",
-                    self.gateway
-                );
-            }
-        }
     }
 
     async fn parse_credential_response(
@@ -380,7 +314,7 @@ impl CardAccount {
         }
     }
 
-    pub(super) async fn fetch_mcp_credential(
+    pub(super) async fn fetch_credential(
         &self,
         access: &CardAccess,
         vendor_id: Option<u16>,
@@ -407,64 +341,6 @@ impl CardAccount {
             )
             .await?;
         Self::parse_credential_response(response, "lynse-agent-auth").await
-    }
-
-    pub(super) async fn fetch_fallback_credential(
-        &self,
-        access: &CardAccess,
-        _vendor_id: Option<u16>,
-        _product_id: Option<u16>,
-    ) -> Result<CardCredential, OwnershipError> {
-        let token_header = Self::bearer_auth_header(&access.token)?;
-        let gateway_origin = self.credential_gateway(access);
-        let endpoint = format!("{}/api/desktop/recording-card/config", gateway_origin);
-
-        let std_client = CLIENT.as_ref().map_err(|err| {
-            log::error!("[recording-card] standard client init failed: {err}");
-            OwnershipError::Unavailable
-        })?;
-        self.bind_agent_session(std_client, &gateway_origin, &access.token)
-            .await;
-
-        let response = self
-            .send_with_pinned_fallback(
-                |client| {
-                    client
-                        .get(&endpoint)
-                        .header(AUTHORIZATION, token_header.clone())
-                        .header(CACHE_CONTROL, "no-cache, no-store")
-                },
-                "agent-config-fallback",
-            )
-            .await?;
-        Self::parse_credential_response(response, "agent-config-fallback").await
-    }
-
-    pub(super) async fn fetch_credential(
-        &self,
-        access: &CardAccess,
-        vendor_id: Option<u16>,
-        product_id: Option<u16>,
-    ) -> Result<CardCredential, OwnershipError> {
-        match self.fetch_mcp_credential(access, vendor_id, product_id).await {
-            Ok(creds) => Ok(creds),
-            Err(OwnershipError::NotBound) => Err(OwnershipError::NotBound),
-            Err(OwnershipError::Denied) => Err(OwnershipError::Denied),
-            Err(primary_err) => {
-                log::warn!(
-                    "[recording-card] lynse-agent-auth ({}) failed ({primary_err}), trying agent-config fallback",
-                    self.mcp_origin()
-                );
-                match self
-                    .fetch_fallback_credential(access, vendor_id, product_id)
-                    .await
-                {
-                    Ok(creds) => Ok(creds),
-                    Err(OwnershipError::Unavailable) => Err(primary_err),
-                    Err(fallback_err) => Err(fallback_err),
-                }
-            }
-        }
     }
 
     pub(super) async fn verify(
@@ -639,8 +515,6 @@ mod tests {
         let cn = CardAccount::from_access(&CardAccess {
             api_base_url: "https://api.lynse.cn/".into(),
             token: "tok-cn".into(),
-            gateway_url: None,
-            agent_base_url: None,
         })
         .expect("cn account");
         assert_eq!(cn.gateway, "https://api.lynse.cn");
@@ -649,8 +523,6 @@ mod tests {
         let intl = CardAccount::from_access(&CardAccess {
             api_base_url: "https://api-en.lynse.ai".into(),
             token: "tok-intl".into(),
-            gateway_url: None,
-            agent_base_url: None,
         })
         .expect("intl account");
         assert_eq!(intl.gateway, "https://api-en.lynse.ai");

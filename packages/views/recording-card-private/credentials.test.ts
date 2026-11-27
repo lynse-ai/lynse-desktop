@@ -9,26 +9,21 @@ import {
 } from "./credentials";
 
 /**
- * The credentials fetch must target the lynclaw assistant origin (its own
- * CloudRun host, reached via the client's agent base URL) — the account API
- * base routes /api/desktop/* to a different backend that never reaches
- * lynclaw. Gateway shells answering plain text must surface a readable
- * error, not a raw JSON.parse failure.
+ * Recording-card pairing credentials are issued by the site-matching
+ * lynse-agent-auth gateway (`/platform/oauth/api/agent/device/recording-card/credential`).
+ * Gateway shells answering plain text must surface a readable error, not a raw
+ * JSON.parse failure.
  */
 
 const apiMock = vi.hoisted(() => ({
   baseUrl: "https://api.lynse.cn",
-  agentBase: "https://lynclaw-api.example.sh.run.tcloudbase.com",
   token: "token-abc" as string | null,
-  ensureAgentSession: vi.fn(async () => undefined),
 }));
 
 vi.mock("@lynse/core/api", () => ({
   api: () => ({
     getBaseUrl: () => apiMock.baseUrl,
-    getAgentBaseUrl: () => apiMock.agentBase,
     getToken: () => apiMock.token,
-    ensureAgentSession: apiMock.ensureAgentSession,
   }),
 }));
 
@@ -44,21 +39,29 @@ function stubFetch(body: string, init?: { status?: number; ok?: boolean }) {
 beforeEach(() => {
   resetRecordingCardConfigCache();
   apiMock.baseUrl = "https://api.lynse.cn";
-  apiMock.agentBase = "https://lynclaw-api.example.sh.run.tcloudbase.com";
   apiMock.token = "token-abc";
-  apiMock.ensureAgentSession.mockClear();
   vi.unstubAllGlobals();
 });
 
 describe("recording card credentials fetch", () => {
-  it("calls the lynclaw agent origin with the bearer token", async () => {
-    const fetchMock = stubFetch(JSON.stringify({ password: "paired-key-123" }));
-    const config = await fetchRecordingCardConfig();
-    expect(config).toEqual({ password: "paired-key-123" });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe("https://lynclaw-api.example.sh.run.tcloudbase.com/api/desktop/recording-card/config");
-    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer token-abc");
+  it("calls the site-matching lynse-agent-auth gateway with the bearer token", async () => {
+    const cases: Array<[string, string]> = [
+      ["https://api.lynse.cn", "https://www.lynse.cn"],
+      ["https://gapp.lynse.cn", "https://www.lynse.cn"],
+      ["https://api-en.lynse.ai", "https://www.lynse.ai"],
+    ];
+    for (const [apiBase, siteOrigin] of cases) {
+      resetRecordingCardConfigCache();
+      apiMock.baseUrl = apiBase;
+      const fetchMock = stubFetch(JSON.stringify({ password: "paired-key-123" }));
+      const config = await fetchRecordingCardConfig();
+      expect(config).toEqual({ password: "paired-key-123" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      expect(url).toBe(`${siteOrigin}/platform/oauth/api/agent/device/recording-card/credential`);
+      expect(init.method).toBe("POST");
+      expect((init.headers as Record<string, string>).Authorization).toBe("Bearer token-abc");
+    }
   });
 
   it("prefills descriptors only when both halves arrive", async () => {
@@ -85,10 +88,9 @@ describe("recording card credentials fetch", () => {
     await expect(fetchRecordingCardConfig()).rejects.toThrow("recording_card_not_bound");
   });
 
-  it("maps 401 responses to recording_card_account_required and binds the agent session", async () => {
+  it("maps 401 responses to recording_card_account_required", async () => {
     stubFetch(JSON.stringify({ detail: "Sign in again" }), { status: 401, ok: false });
     await expect(fetchRecordingCardConfig()).rejects.toThrow("recording_card_account_required");
-    expect(apiMock.ensureAgentSession).toHaveBeenCalledTimes(1);
   });
 
   it("invalidates the cached config when the business server base URL changes", async () => {
@@ -99,40 +101,13 @@ describe("recording card credentials fetch", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("uses same-origin lynse-agent-auth on www.lynse.cn and www.lynse.ai", async () => {
-    const originalLocation = window.location;
-    const cases: Array<[string, string]> = [
-      ["https://api.lynse.cn", "https://www.lynse.cn"],
-      ["https://api-en.lynse.ai", "https://www.lynse.ai"],
-    ];
-    for (const [apiBase, siteOrigin] of cases) {
-      resetRecordingCardConfigCache();
-      apiMock.baseUrl = apiBase;
-      Object.defineProperty(window, "location", {
-        configurable: true,
-        value: { origin: siteOrigin },
-      });
-      const fetchMock = stubFetch(JSON.stringify({ password: "paired-key-123" }));
-      const config = await fetchRecordingCardConfig();
-      expect(config.password).toBe("paired-key-123");
-      const [url] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-      expect(url).toBe(
-        `${siteOrigin}/platform/oauth/api/agent/device/recording-card/credential`,
-      );
-    }
-    Object.defineProperty(window, "location", {
-      configurable: true,
-      value: originalLocation,
-    });
-  });
-
-  it("fails fast without a session or agent address", async () => {
+  it("fails fast without a session or recognized account gateway", async () => {
     const fetchMock = stubFetch("{}");
     apiMock.token = null;
     await expect(fetchRecordingCardConfig()).rejects.toThrow("no signed-in session");
     apiMock.token = "token-abc";
-    apiMock.agentBase = "";
-    await expect(fetchRecordingCardConfig()).rejects.toThrow("assistant service address is not ready");
+    apiMock.baseUrl = "https://unknown.example.com";
+    await expect(fetchRecordingCardConfig()).rejects.toThrow("recording_card_verification_unavailable");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

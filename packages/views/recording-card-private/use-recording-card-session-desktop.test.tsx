@@ -78,14 +78,6 @@ const mock = vi.hoisted(() => {
   return { state, api, file };
 });
 
-vi.mock("./credentials", () => ({
-  fetchRecordingCardConfig: async () => ({
-    password: "paired-key-123",
-    vendorId: 0x3654,
-    productId: 0x4155,
-  }),
-}));
-
 vi.mock("@lynse/core/api", () => ({
   api: () => ({
     getToken: () => "valid-session",

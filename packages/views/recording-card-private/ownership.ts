@@ -30,7 +30,6 @@ export function getRecordingCardAccess() {
   if (!token) throw new Error("recording_card_account_required");
   return {
     apiBaseUrl: client.getBaseUrl(),
-    agentBaseUrl: typeof client.getAgentBaseUrl === "function" ? client.getAgentBaseUrl() ?? undefined : undefined,
     token,
   };
 }

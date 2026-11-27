@@ -4,16 +4,9 @@ import { api } from "@lynse/core/api";
  * Firmware pairing credentials for the USB recording card.
  *
  * The password gates USB access to a physically-held card, so it is never
- * hardcoded into this public repository or the shipped bundle: lynclaw
- * serves it behind user authentication and the page fetches it after the
- * AuthGate has confirmed a session. If the vendor ever confirms the password
- * is a non-secret pairing gate, this module is the single place to swap in a
- * build-time constant instead.
- *
- * The endpoint lives on the lynclaw assistant service (its own CloudRun
- * origin), NOT under the account API base — /api/desktop/* on the account
- * backend belongs to a different service and never reaches lynclaw. lynclaw
- * sends per-origin CORS headers, so the browser calls it directly.
+ * hardcoded into this public repository or the shipped bundle: lynse-agent-auth
+ * serves it behind user authentication at
+ * `/platform/oauth/api/agent/device/recording-card/credential`.
  *
  * Vendor/product IDs are optional overrides for the reference hardware pair
  * the vendor SDK filters on; when the server omits them, connect falls back
@@ -36,16 +29,17 @@ interface RawConfig {
   productId?: number;
 }
 
-/** Site auth-gateway origin per business API origin (reuses lynse-agent-auth). */
+/** Site auth-gateway origin per business API origin (lynse-agent-auth). */
 const API_HOST_TO_AGENT_AUTH_ORIGIN: Record<string, string> = {
   "api.lynse.cn": "https://www.lynse.cn",
   "gapp.lynse.cn": "https://www.lynse.cn",
   "api-en.lynse.ai": "https://www.lynse.ai",
+  "api.lynse.ai": "https://www.lynse.ai",
 };
 
 function agentAuthOriginForApi(apiBase: string): string | null {
   try {
-    const host = new URL(apiBase).host;
+    const host = new URL(apiBase).host.toLowerCase();
     return API_HOST_TO_AGENT_AUTH_ORIGIN[host] ?? null;
   } catch {
     return null;
@@ -62,53 +56,27 @@ let cachedRequest: {
 /** Share the pairing-config request for the current signed-in session. */
 export async function fetchRecordingCardConfig(): Promise<RecordingCardConfig> {
   const client = api();
-  const agentBase = client.getAgentBaseUrl();
   const token = client.getToken();
   const apiBase = typeof client.getBaseUrl === "function" ? client.getBaseUrl() : "";
   if (!token) {
     throw new Error("no signed-in session");
   }
   const siteOrigin = agentAuthOriginForApi(apiBase);
-  const sameOriginAuth =
-    typeof window !== "undefined" &&
-    siteOrigin !== null &&
-    window.location?.origin === siteOrigin;
-  if (!sameOriginAuth && !agentBase) {
-    throw new Error("assistant service address is not ready");
+  if (!siteOrigin) {
+    throw new Error("recording_card_verification_unavailable");
   }
-  const origin = sameOriginAuth ? siteOrigin : new URL(agentBase!).origin;
   if (
     cachedRequest?.apiBase === apiBase &&
-    cachedRequest?.origin === origin &&
+    cachedRequest?.origin === siteOrigin &&
     cachedRequest.token === token
   ) {
     return cachedRequest.result;
   }
   const request = {
     apiBase,
-    origin,
+    origin: siteOrigin,
     token,
-    result: (async () => {
-      if (sameOriginAuth) {
-        try {
-          return await requestCredentialFromAgentAuth(siteOrigin, token);
-        } catch (err) {
-          if (!agentBase || err instanceof Error && (
-            err.message === "recording_card_account_required" ||
-            err.message === "recording_card_not_bound"
-          )) {
-            throw err;
-          }
-        }
-      }
-      if (!agentBase) {
-        throw new Error("assistant service address is not ready");
-      }
-      if (typeof client.ensureAgentSession === "function") {
-        await client.ensureAgentSession().catch(() => undefined);
-      }
-      return requestConfig(new URL(agentBase).origin, token);
-    })(),
+    result: requestCredentialFromAgentAuth(siteOrigin, token),
   };
   cachedRequest = request;
   try {
@@ -156,14 +124,6 @@ async function parseCredentialResponse(response: Response): Promise<RecordingCar
 async function requestCredentialFromAgentAuth(origin: string, token: string): Promise<RecordingCardConfig> {
   const response = await fetch(`${origin}/platform/oauth/api/agent/device/recording-card/credential`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
-    cache: "no-store",
-  });
-  return parseCredentialResponse(response);
-}
-
-async function requestConfig(origin: string, token: string): Promise<RecordingCardConfig> {
-  const response = await fetch(`${origin}/api/desktop/recording-card/config`, {
     headers: { Authorization: `Bearer ${token}` },
     cache: "no-store",
   });

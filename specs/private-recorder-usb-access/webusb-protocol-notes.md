@@ -94,7 +94,7 @@ connection.control_in(
 - 文件命名：设备名是随机 hex（如 `c84714.raw`），列表和进度条改用 `start_time` 转成本地时间 `YYYY-MM-DD HH:MM:SS`（半角冒号，与 web 端一致），时间戳无效时才回退设备名；列表同时用时钟图标 + `end_time - start_time` 显示录音时长；Web 下载保留原扩展名，桌面端保存为 `.wav`
 - 下载：连续 bulk IN 拼帧 → 校验长度/CRC → 直写磁盘（tmp 文件）→ 进度 Channel → 校验字节数 == file.size → 完成
 - 内存：不再整文件驻留（Web JS 版是整 Uint8Array）；Rust 流式写盘天然无此问题
-- 会话安全：拔线 / 插件停用 / 关闭开关 → 取消任务 + release_interface + close；口令由 Rust 直接调 lynclaw `/api/desktop/recording-card/config`（用已保存 token），不下发前端
+- 会话安全：拔线 / 插件停用 / 关闭开关 → 取消任务 + release_interface + close；口令由 Rust 直接调 `lynse-agent-auth` `POST /platform/oauth/api/agent/device/recording-card/credential`（用已保存 token），不下发前端
 
 ## 待真机确认（4 项已全部解完）
 

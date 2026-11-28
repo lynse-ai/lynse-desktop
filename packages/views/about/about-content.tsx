@@ -9,6 +9,7 @@ import {
   openAppUpdateDialog,
   useAppUpdate,
 } from "../app-update";
+import { formatAppBuildLabel } from "../app-version";
 import { openLogsFolder } from "../diagnostics";
 import { LYNSE_APP_ICON_SRC } from "./app-icon";
 import { WEBSITE_URL, privacyUrl, termsUrl } from "./links";
@@ -43,16 +44,16 @@ export function AboutContent() {
   const { update, checking } = useAppUpdate();
   const isDesktop = Boolean(getDesktopAppApi());
   const appInfo = getAppInfoSync();
-  // Build number in parentheses after the version, native-About style
-  // ("1.0.3 (107)") — present only in bundled macOS releases. The web build
-  // has no Rust bridge; it falls back to the version Next inlines from the
+  // Version line + separate build/commit metadata underneath (e.g. "Build 107 · a3f9c2d").
+  // The web build has no Rust bridge; it falls back to the version Next inlines from the
   // app package.json at build time.
   const webVersion = (typeof process !== "undefined" && process.env.NEXT_PUBLIC_APP_VERSION) || "";
   const versionLabel = appInfo
-    ? `v${appInfo.version}${appInfo.build ? ` (${appInfo.build})` : ""}`
+    ? `v${appInfo.version}`
     : webVersion
       ? `v${webVersion}`
       : "—";
+  const buildLabel = formatAppBuildLabel(appInfo);
   const hasUpdate = Boolean(update?.hasUpdate);
   const year = new Date().getFullYear();
 
@@ -73,9 +74,14 @@ export function AboutContent() {
       <h1 className="mt-4 text-base font-semibold tracking-tight">
         {t("app_name")}
       </h1>
-      <p className="mt-1 text-xs tabular-nums text-muted-foreground">
+      <p className="mt-1 text-xs tabular-nums text-muted-foreground select-text">
         {versionLabel}
       </p>
+      {buildLabel && (
+        <p className="mt-0.5 font-mono text-2xs tabular-nums text-muted-foreground/75 select-text">
+          {buildLabel}
+        </p>
+      )}
 
       {/* Update entry — the shared update dialog (mounted by the host of this
           content) owns the whole check / download / install flow. */}

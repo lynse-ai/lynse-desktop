@@ -13,6 +13,7 @@ import { getAuthStore } from "@lynse/core/auth";
 import { Check, Loader2 } from "./icons";
 import { initI18n } from "@lynse/core/i18n";
 import { getAppInfoSync } from "./app-update";
+import { formatAppVersionFull } from "./app-version";
 import {
   buildIssueUrl,
   getDesktopDiagnosticsApi,
@@ -65,7 +66,7 @@ function composeIssueBody(input: {
     input.description.trim(),
     "",
     "## 环境 / Environment",
-    `- App: v${appInfo?.version ?? "unknown"}`,
+    `- App: ${formatAppVersionFull(appInfo)}`,
     `- Platform: ${appInfo?.platform ?? "unknown"}`,
     `- User agent: ${typeof navigator !== "undefined" ? navigator.userAgent : "unknown"}`,
     `- Date: ${new Date().toISOString()}`,

@@ -85,7 +85,7 @@ BUILD_NUMBER_FILE="$APP_DIR/.build-number"
 LAST_BUILD="$(cat "$BUILD_NUMBER_FILE" 2>/dev/null || echo 0)"
 COMMITS="$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo 0)"
 NEXT_BASE=$(( LAST_BUILD > COMMITS ? LAST_BUILD : COMMITS ))
-BUILD_NUMBER="${BUILD_NUMBER:-$(( NEXT_BASE + 1 ))}"
+export BUILD_NUMBER="${BUILD_NUMBER:-$(( NEXT_BASE + 1 ))}"
 echo "$BUILD_NUMBER" > "$BUILD_NUMBER_FILE"
 log "Apple build number: $BUILD_NUMBER"
 

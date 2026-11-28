@@ -688,3 +688,47 @@ describe("interrupted reply details", () => {
     expect(store.getState().messages.at(-1)?.toolUses).toBeUndefined();
   });
 });
+
+describe("streaming Markdown preservation", () => {
+  it("keeps spaces, newlines, indentation, and split links intact across streaming deltas", () => {
+    store.getState().sendMessage("帮我整理纪要");
+    const run = fake.runs[0]!;
+    const deltas = [
+      "##",
+      " ",
+      "核心结论",
+      "\n\n",
+      "-",
+      " ",
+      "**录音链路**已完成",
+      "\n",
+      "  - ",
+      "详见 [项目周会](https://app.lynse.ai/meeting/1735000123456789012",
+      ")",
+      "\n\n",
+      "```ts",
+      "\n",
+      "  const ok = true;",
+      "\n",
+      "```",
+    ];
+    let expected = "";
+    for (const delta of deltas) {
+      expected += delta;
+      emit(run, { type: "content", delta });
+      expect(store.getState().messages.at(-1)!.content).toBe(expected);
+    }
+
+    emit(run, { type: "done", text: expected });
+    expect(store.getState().messages.at(-1)!.content).toBe(expected);
+  });
+
+  it("redacts a meeting ID split across deltas without eating surrounding Markdown spacing", () => {
+    store.getState().sendMessage("查会议");
+    const run = fake.runs[0]!;
+    emit(run, { type: "content", delta: "- 会议 173500012" });
+    emit(run, { type: "content", delta: "3456789012 " });
+    emit(run, { type: "content", delta: "已记录\n\n下一段" });
+    expect(store.getState().messages.at(-1)!.content).toBe("- 会议 已记录\n\n下一段");
+  });
+});

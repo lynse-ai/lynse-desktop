@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { normalizeReleaseNotesLocales, selectReleaseNotes, type ReleaseNotesLocales } from "@lynse/core/i18n";
 import { useTranslation } from "@lynse/core/i18n/react";
+import type { AppInfo } from "./app-version";
+
+export { formatAppBuildLabel, formatAppVersionFull, type AppInfo } from "./app-version";
 
 export type AppUpdateInfo = {
   currentVersion: string;
@@ -79,7 +82,7 @@ export type UpdateInstallState = {
 };
 
 type DesktopAppApi = {
-  getInfo: () => Promise<{ version: string; build?: string | null; platform: string }>;
+  getInfo: () => Promise<AppInfo>;
   /** Opens (or focuses) the standalone About window with a localized title. */
   openAboutWindow: (title?: string) => Promise<void>;
   /** Opens (or focuses) the standalone feedback board window with a localized title. */
@@ -166,21 +169,11 @@ export function getDesktopAppApi(): DesktopAppApi | null {
 }
 
 /** Synchronously read the version the bridge populated from the Rust host. */
-export function getAppInfoSync(): {
-  version: string;
-  build?: string | null;
-  platform: string;
-  sandboxed?: boolean;
-} | null {
+export function getAppInfoSync(): AppInfo | null {
   if (typeof window === "undefined") return null;
   const desktopWindow = window as Window & {
     desktopAPI?: {
-      appInfo?: {
-        version: string;
-        build?: string | null;
-        platform: string;
-        sandboxed?: boolean;
-      };
+      appInfo?: AppInfo;
     };
   };
   return desktopWindow.desktopAPI?.appInfo ?? null;

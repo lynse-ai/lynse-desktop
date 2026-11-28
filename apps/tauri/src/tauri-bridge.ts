@@ -154,6 +154,7 @@ export type DesktopApi = {
   appInfo: {
     version: string;
     build?: string | null;
+    gitSha?: string | null;
     platform: string;
     /** macOS App Sandbox (TestFlight/App Store) build — updater must not install in place. */
     sandboxed: boolean;
@@ -163,6 +164,8 @@ export type DesktopApi = {
     exitOnboardingWindowSize?: () => Promise<void>;
     getInfo: () => Promise<{
       version: string;
+      build: string | null;
+      gitSha: string | null;
       platform: string;
       sandboxed: boolean;
     }>;
@@ -717,7 +720,7 @@ export async function installTauriBridge(windowKind: string | null = null): Prom
           callback(event.payload),
         ),
     },
-    appInfo: { version: "0.1.0", build: null, platform: "darwin", sandboxed: false },
+    appInfo: { version: "0.1.0", build: null, gitSha: null, platform: "darwin", sandboxed: false },
     app: {
       // The permission onboarding carries one more row than the dashboard
       // face was sized for, so it opens with the window enlarged and hands
@@ -755,6 +758,7 @@ export async function installTauriBridge(windowKind: string | null = null): Prom
         command<{
           version: string;
           build: string | null;
+          gitSha: string | null;
           platform: string;
           sandboxed: boolean;
         }>("get_app_info"),

@@ -194,6 +194,10 @@ function isAlreadyLinked(text: string, linkStart: number, linkEnd: number): bool
   const charAfter = text[linkEnd]
   if (charBefore === '[' && charAfter === ']') return true
 
+  // Check if this URL is the destination of a Markdown reference definition (`[ref]: https://...`)
+  const lineStart = text.lastIndexOf('\n', linkStart - 1) + 1
+  if (/^[ \t]*\[[^\]]+\]:[ \t]*<?$/.test(text.slice(lineStart, linkStart))) return true
+
   return false
 }
 

@@ -29,6 +29,15 @@ describe("redactMeetingIds", () => {
     expect(redactMeetingIds("编号: ABC123XYZ 已完成")).toBe("已完成");
   });
 
+  it.each(["\n", "\r\n"])("redacts an ID on the next line and keeps the Markdown line breaks (%j)", (newline) => {
+    const input = ["## 纪要", "", "会议编号：", "  MT-873402", "", "  后续事项"].join(newline);
+    const redacted = ["## 纪要", "", "", "  ", "", "  后续事项"].join(newline);
+    expect(redactMeetingIds(input)).toBe(redacted);
+    expect(redactMeetingIds(input, { streaming: true })).toBe(redacted);
+    const prose = ["会议编号：", "  See the meeting notes"].join(newline);
+    expect(redactMeetingIds(prose)).toBe(prose);
+  });
+
   it("preserves legitimate short numbers (dates, phones, durations, years)", () => {
     expect(redactMeetingIds("日期 2026-07-21 时间 14:15:26")).toBe("日期 2026-07-21 时间 14:15:26");
     expect(redactMeetingIds("联系电话 13800138000")).toBe("联系电话 13800138000");
@@ -58,5 +67,43 @@ describe("redactMeetingIds", () => {
     expect(out).toContain("项目周会");
     expect(out).toContain("需求评审");
     expect(out).toContain("需要我总结哪一个？");
+  });
+
+  it("preserves Markdown blank lines, trailing whitespace, nested indentation, and code blocks", () => {
+    const markdown = [
+      "## 关键结论",
+      "",
+      "- 一级列表",
+      "  - 二级缩进",
+      "",
+      "```ts",
+      "function demo() {",
+      "  const id = '1735000123456789012';",
+      "  return id;",
+      "}",
+      "```",
+    ].join("\n");
+    expect(redactMeetingIds(markdown)).toBe(markdown);
+    expect(redactMeetingIds("## ", { streaming: true })).toBe("## ");
+    expect(redactMeetingIds("## 总结\n\n", { streaming: true })).toBe("## 总结\n\n");
+    expect(redactMeetingIds("## 总结\n\n- ", { streaming: true })).toBe("## 总结\n\n- ");
+  });
+
+  it("preserves blank lines and indentation when redacting IDs inside Markdown", () => {
+    const input = [
+      "## 会议列表",
+      "",
+      "  - 项目周会 (1735000123456789012)",
+      "",
+      "后续安排如下：",
+    ].join("\n");
+    expect(redactMeetingIds(input)).toBe(
+      ["## 会议列表", "", "  - 项目周会", "", "后续安排如下："].join("\n"),
+    );
+  });
+
+  it("protects unclosed Markdown links containing numeric IDs while streaming", () => {
+    const partial = "查看 [项目周会](https://app.lynse.ai/meeting/1735000123456789012";
+    expect(redactMeetingIds(partial, { streaming: true })).toBe(partial);
   });
 });

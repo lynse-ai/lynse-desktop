@@ -63,29 +63,28 @@ export function CodeBlock({
   mode = 'full'
 }: CodeBlockProps): React.JSX.Element {
   const { t } = useTranslation("ui")
-  const [highlighted, setHighlighted] = React.useState<string | null>(null)
-  const [isLoading, setIsLoading] = React.useState(true)
-  const [copied, setCopied] = React.useState(false)
 
   // Resolve language alias - keep as string to allow 'text' fallback
   const langLower = language.toLowerCase()
   const resolvedLang: string = LANGUAGE_ALIASES[langLower] || langLower
+  const cacheKey = getCacheKey(code, resolvedLang)
+  const cachedHtml = highlightCache.get(cacheKey) ?? null
+
+  const [highlighted, setHighlighted] = React.useState<{ key: string; html: string } | null>(
+    () => (cachedHtml ? { key: cacheKey, html: cachedHtml } : null)
+  )
+  const [copied, setCopied] = React.useState(false)
 
   React.useEffect(() => {
     let cancelled = false
 
+    const cached = highlightCache.get(cacheKey)
+    if (cached) {
+      setHighlighted((prev) => (prev?.key === cacheKey ? prev : { key: cacheKey, html: cached }))
+      return
+    }
+
     async function highlight(): Promise<void> {
-      const cacheKey = getCacheKey(code, resolvedLang)
-
-      const cached = highlightCache.get(cacheKey)
-      if (cached) {
-        if (!cancelled) {
-          setHighlighted(cached)
-          setIsLoading(false)
-        }
-        return
-      }
-
       try {
         // Use valid language or fallback to plaintext
         const lang = isValidLanguage(resolvedLang) ? resolvedLang : 'text'
@@ -109,25 +108,27 @@ export function CodeBlock({
         highlightCache.set(cacheKey, html)
 
         if (!cancelled) {
-          setHighlighted(html)
-          setIsLoading(false)
+          setHighlighted({ key: cacheKey, html })
         }
       } catch (error) {
         // Fallback to plain text on error
         console.warn(`Shiki highlighting failed for language "${resolvedLang}":`, error)
         if (!cancelled) {
           setHighlighted(null)
-          setIsLoading(false)
         }
       }
     }
 
-    highlight()
+    void highlight()
 
     return () => {
       cancelled = true
     }
-  }, [code, resolvedLang])
+  }, [code, resolvedLang, cacheKey])
+
+  // Prefer a synchronous cache hit; never display stale HTML from an earlier
+  // streaming chunk when newer code lines have arrived.
+  const activeHtml = cachedHtml ?? (highlighted?.key === cacheKey ? highlighted.html : null)
 
   const handleCopy = React.useCallback(async () => {
     try {
@@ -150,7 +151,7 @@ export function CodeBlock({
 
   // Minimal mode: just syntax highlighting, no chrome
   if (mode === 'minimal') {
-    if (isLoading || !highlighted) {
+    if (!activeHtml) {
       return (
         <pre className={cn('font-mono text-sm whitespace-pre-wrap', className)}>
           <code className="font-mono">{code}</code>
@@ -164,7 +165,7 @@ export function CodeBlock({
           'font-mono text-sm [&_pre]:!bg-transparent [&_pre]:!p-0 [&_pre]:whitespace-pre-wrap [&_pre]:break-all [&_code]:!bg-transparent [&_code]:font-mono [&_pre]:font-mono',
           className
         )}
-        dangerouslySetInnerHTML={{ __html: highlighted }}
+        dangerouslySetInnerHTML={{ __html: activeHtml }}
       />
     )
   }
@@ -206,14 +207,14 @@ export function CodeBlock({
 
       {/* Code content */}
       <div className="p-3 overflow-x-auto">
-        {isLoading || !highlighted ? (
+        {!activeHtml ? (
           <pre className="font-mono text-sm whitespace-pre-wrap break-all">
             <code className="font-mono">{code}</code>
           </pre>
         ) : (
           <div
             className="font-mono text-sm [&_pre]:!bg-transparent [&_pre]:!m-0 [&_pre]:!p-0 [&_pre]:whitespace-pre-wrap [&_pre]:break-all [&_code]:!bg-transparent [&_code]:font-mono [&_pre]:font-mono"
-            dangerouslySetInnerHTML={{ __html: highlighted }}
+            dangerouslySetInnerHTML={{ __html: activeHtml }}
           />
         )}
       </div>

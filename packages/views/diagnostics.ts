@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import i18next from "i18next";
 import { toast } from "sonner";
 import { getAppInfoSync, openExternalUrl } from "./app-update";
+import { formatAppVersionFull } from "./app-version";
 
 const ISSUE_TRACKER_URL = "https://github.com/lynse-ai/lynse-desktop/issues/new";
 
@@ -279,7 +280,7 @@ function environmentSummary(): { version: string; platform: string; text: string
   const version = appInfo?.version || "unknown";
   const platform = appInfo?.platform ?? "unknown";
   const text = [
-    `- App: v${version}`,
+    `- App: ${formatAppVersionFull(appInfo)}`,
     `- Platform: ${platform}`,
     `- User agent: ${typeof navigator !== "undefined" ? navigator.userAgent : "unknown"}`,
     `- Date: ${new Date().toISOString()}`,

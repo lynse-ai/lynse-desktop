@@ -4479,6 +4479,21 @@ fn is_app_sandboxed() -> bool {
     false
 }
 
+fn compile_time_env(value: Option<&'static str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_owned)
+}
+
+fn resolved_build_number() -> Option<String> {
+    bundle_build_number().or_else(|| compile_time_env(option_env!("LYNSE_BUILD_NUMBER")))
+}
+
+fn resolved_git_sha() -> Option<String> {
+    compile_time_env(option_env!("LYNSE_GIT_SHA"))
+}
+
 #[tauri::command]
 fn get_app_info(app: AppHandle) -> Value {
     let version = app.package_info().version.to_string();
@@ -4488,7 +4503,13 @@ fn get_app_info(app: AppHandle) -> Value {
         "linux" => "linux",
         other => other,
     };
-    json!({ "version": version, "build": bundle_build_number(), "platform": platform, "sandboxed": is_app_sandboxed() })
+    json!({
+        "version": version,
+        "build": resolved_build_number(),
+        "gitSha": resolved_git_sha(),
+        "platform": platform,
+        "sandboxed": is_app_sandboxed(),
+    })
 }
 
 /// Reveal the app log folder in the system file manager so users can attach

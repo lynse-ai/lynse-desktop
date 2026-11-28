@@ -1239,6 +1239,12 @@ describe("safeSliceEnd", () => {
     expect(safeSliceEnd("a b c", 2)).toBe(2);
     expect(safeSliceEnd(cjk, cjk.length)).toBe(cjk.length);
   });
+
+  it("does not split repeated Markdown syntax delimiters or heading prefixes", () => {
+    expect(safeSliceEnd("这是**重点**", 3)).toBe(4); // "这是**"
+    expect(safeSliceEnd("### 标题", 2)).toBe(4); // "### "
+    expect(safeSliceEnd("```ts\ncode\n```", 1)).toBe(3); // "```"
+  });
 });
 
 describe("typewriter slice integrity", () => {

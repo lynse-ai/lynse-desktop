@@ -132,11 +132,13 @@ describe("StreamChatTransport resilience", () => {
   });
 
   it("treats explicit SSE errors as terminal even if the socket stays open", async () => {
+    Object.assign(chatPollTiming, { typewriterTickMs: 38, typewriterMaxMs: 10_000 });
     const attempt = queueStream([{ type: "content", content: "partial" }, { type: "error", error: "system.error.busy" }], "open");
     const onEvent = vi.fn();
     await new StreamChatTransport().send(options({ onEvent }));
     expect(attempt.controller.signal.aborted).toBe(true);
     expect(requests.post).not.toHaveBeenCalled();
+    expect(events(onEvent).flatMap((event) => event.type === "content" ? [event.delta] : []).join("")).toBe("partial");
     expect(events(onEvent).at(-1)).toEqual({ type: "error", message: "当前使用人数较多，请稍后再试" });
   });
 
@@ -311,5 +313,115 @@ describe("StreamChatTransport resilience", () => {
     expect(requests.get.mock.calls[0]![1].signal.aborted).toBe(true);
     expect(requests.post).toHaveBeenCalledWith("/api/business/ai/chat/poll/task/cancel", {}, expect.any(Object));
     expect(events(onEvent).filter((event) => ["content", "done", "error"].includes(event.type))).toEqual([]);
+  });
+
+  it.each(["complete", "late error"] as const)("paces bursty SSE chunks and preserves done + confirm through %s", async (ending) => {
+    chatPollTiming.typewriterTickMs = 38;
+    chatPollTiming.typewriterMaxMs = 10_000;
+    const full = "## 核心结论\n\n- **录音链路**已完成\n- 实时转写稳定";
+    const attempt = queueStream([
+      { type: "content", content: full },
+      { type: "done", text: full },
+      { type: "confirmation", title: "确认", confirmToken: "tok", actions: [{ label: "好", value: "ok" }] },
+    ], ending === "complete" ? "complete" : "open");
+    const onEvent = vi.fn();
+    const sending = new StreamChatTransport().send(options({ onEvent }));
+
+    // First slice lands immediately (zero first-token latency), while `done`
+    // waits until the buffered text finishes typing out smoothly.
+    const initialContents = events(onEvent).filter((e) => e.type === "content");
+    expect(initialContents).toHaveLength(1);
+    expect(initialContents[0]!.delta.length).toBeLessThan(full.length);
+    expect(events(onEvent).some((e) => e.type === "done")).toBe(false);
+
+    if (ending === "late error") attempt.chunk({ type: "error", error: "late server error" });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await sending;
+
+    const allEvents = events(onEvent);
+    const contentDeltas = allEvents.filter((e) => e.type === "content").map((e) => e.delta);
+    expect(contentDeltas.length).toBeGreaterThan(5);
+    expect(contentDeltas.join("")).toBe(full);
+    expect(allEvents.at(-2)?.type).toBe("done");
+    expect(allEvents.at(-1)).toMatchObject({ type: "confirm", confirm: { confirmToken: "tok" } });
+    expect(allEvents.filter((e) => e.type === "error")).toEqual([]);
+    expect(attempt.controller.signal.aborted).toBe(true);
+  });
+
+  it("delivers a completed answer and trailing confirmation even when the reader stays open", async () => {
+    Object.assign(chatPollTiming, { typewriterTickMs: 38, typewriterMaxMs: 10_000, deadlineMs: 100 });
+    const text = "一段已完成的回复";
+    const reader = queueStream([{ type: "done", text, task_id: "finished-task" }], "open");
+    const onEvent = vi.fn();
+    const sending = new StreamChatTransport().send(options({ onEvent }));
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(events(onEvent).at(-1)).toMatchObject({ type: "done", text });
+    expect(reader.controller.signal.aborted).toBe(false);
+
+    reader.chunk({ type: "confirmation", title: "确认", confirmToken: "trailing", actions: [{ label: "好", value: "ok" }] });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(reader.controller.signal.aborted).toBe(true);
+    await sending;
+
+    expect(events(onEvent).at(-1)).toMatchObject({ type: "confirm", confirm: { confirmToken: "trailing" } });
+    expect(requests.post).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([1_000, 20_000])("delivers a %i-character done-only answer within the typewriter time limit", async (length) => {
+    Object.assign(chatPollTiming, { typewriterTickMs: 38, typewriterMaxMs: 10_000 });
+    const text = "字".repeat(length);
+    queueStream([{ type: "done", text }]);
+    const onEvent = vi.fn();
+    const sending = new StreamChatTransport().send(options({ onEvent }));
+
+    await vi.advanceTimersByTimeAsync(chatPollTiming.typewriterMaxMs);
+    const received = events(onEvent);
+    expect(received.at(-1)?.type).toBe("done");
+    expect(received.flatMap((event) => event.type === "content" ? [event.delta] : []).join("")).toBe(text);
+    await sending;
+  });
+
+  it("stops pacing immediately when cancelled mid-drain and leaves no timers behind", async () => {
+    chatPollTiming.typewriterTickMs = 38;
+    chatPollTiming.typewriterMaxMs = 10_000;
+    const full = "这是一段比较长的回复内容，用来测试用户点击停止时打字机是否立刻停住。";
+    queueStream([{ type: "content", content: full }, { type: "done", text: full }]);
+    const transport = new StreamChatTransport();
+    const onEvent = vi.fn();
+    const sending = transport.send(options({ onEvent }));
+
+    await vi.advanceTimersByTimeAsync(76);
+    transport.cancel();
+    await sending;
+
+    const streamed = events(onEvent)
+      .filter((e) => e.type === "content")
+      .map((e) => e.delta)
+      .join("");
+    expect(streamed.length).toBeGreaterThan(0);
+    expect(streamed.length).toBeLessThan(full.length);
+    expect(events(onEvent).some((e) => e.type === "done")).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("still paces text after a 503 busy retry succeeds", async () => {
+    chatPollTiming.typewriterTickMs = 38;
+    chatPollTiming.typewriterMaxMs = 10_000;
+    queueStream([], new ApiError(503, "busy"));
+    queueStream([{ type: "done", text: "重试后成功返回的回复" }]);
+    const onEvent = vi.fn();
+    const sending = new StreamChatTransport().send(options({ onEvent }));
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await sending;
+
+    const contentDeltas = events(onEvent)
+      .filter((e) => e.type === "content")
+      .map((e) => e.delta);
+    expect(contentDeltas.length).toBeGreaterThan(3);
+    expect(contentDeltas.join("")).toBe("重试后成功返回的回复");
+    expect(events(onEvent).at(-1)?.type).toBe("done");
   });
 });

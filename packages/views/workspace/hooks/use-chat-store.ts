@@ -306,6 +306,8 @@ interface ChatRun {
   assistantId: string;
   transport: ChatTransport;
   controller: AbortController;
+  /** Unredacted raw content accumulated across streaming deltas. */
+  rawContent: string;
 }
 
 // Engine state that doesn't need to trigger re-renders — kept at module scope.
@@ -438,15 +440,31 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
         }));
         break;
       }
-      case "content":
-        writeMessage((m) => ({
-          ...m,
-          content: redactMeetingIds(m.content + evt.delta),
-          // The answer is streaming: reasoning is over and pending tools finished.
-          thinkingActive: false,
-          toolUses: closeRunningTools(m.toolUses),
-        }));
+      case "content": {
+        const activeRun = runs.get(conversationId);
+        if (activeRun && activeRun.assistantId === assistantId) {
+          // Accumulate into the unredacted raw buffer so streaming redaction
+          // never mutates future deltas (preserving Markdown spaces, newlines,
+          // and split links/IDs across chunks).
+          activeRun.rawContent += evt.delta;
+          const display = redactMeetingIds(activeRun.rawContent, { streaming: true });
+          writeMessage((m) => ({
+            ...m,
+            content: display,
+            // The answer is streaming: reasoning is over and pending tools finished.
+            thinkingActive: false,
+            toolUses: closeRunningTools(m.toolUses),
+          }));
+        } else {
+          writeMessage((m) => ({
+            ...m,
+            content: redactMeetingIds(m.content + evt.delta, { streaming: true }),
+            thinkingActive: false,
+            toolUses: closeRunningTools(m.toolUses),
+          }));
+        }
         break;
+      }
       case "thinking":
         writeMessage((m) => ({
           ...m,
@@ -468,14 +486,16 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
       case "meta":
         writeMessage((m) => ({
           ...m,
-          sources: evt.sources ? evt.sources.map(redactMeetingIds) : m.sources,
+          sources: evt.sources ? evt.sources.map((source) => redactMeetingIds(source)) : m.sources,
           attachments: evt.attachments,
           connectionRequests: evt.connectionRequests ?? m.connectionRequests,
         }));
         break;
       case "done": {
         const current = findMessage();
-        const finalContent = evt.text ?? current?.content ?? "";
+        const activeRun = runs.get(conversationId);
+        const streamedRaw = activeRun && activeRun.assistantId === assistantId ? activeRun.rawContent : undefined;
+        const finalContent = evt.text ?? streamedRaw ?? current?.content ?? "";
         writeMessage((m) => ({
           ...m,
           // Images the attachment cards already render (same signed URL) are
@@ -488,7 +508,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
           errorMessage: undefined,
           thinkingActive: false,
           toolUses: closeRunningTools(m.toolUses),
-          sources: evt.sources ? evt.sources.map(redactMeetingIds) : m.sources,
+          sources: evt.sources ? evt.sources.map((source) => redactMeetingIds(source)) : m.sources,
           attachments: evt.attachments ?? m.attachments,
           humanSupportLink: evt.humanSupportLink,
           connectionRequests: evt.connectionRequests ?? m.connectionRequests,
@@ -716,7 +736,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
         ? hasWorkBuddyAcpBridge() ? new WorkBuddyCloudChatTransport() : new WorkBuddyChatTransport()
         : new StreamChatTransport();
     const controller = new AbortController();
-    runs.set(conversationId, { conversationId, assistantId, transport, controller });
+    runs.set(conversationId, { conversationId, assistantId, transport, controller, rawContent: "" });
     syncRunState();
 
     const timing = {

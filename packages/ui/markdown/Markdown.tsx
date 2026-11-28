@@ -74,6 +74,13 @@ export interface MarkdownProps {
    * the views-package `<Attachment>` component.
    */
   renderFileCard?: (props: { href: string; filename: string }) => React.ReactNode
+  /**
+   * Render without the outer `.markdown-content` wrapper `<div>`. Used by
+   * `StreamingMarkdown` so memoized blocks sit directly inside one shared
+   * `.markdown-content` container with identical CSS child-selector semantics
+   * (`:first-child` / `:last-child`) during and after streaming.
+   */
+  bare?: boolean
 }
 
 // Sanitization schema — extends GitHub defaults to allow code highlighting classes
@@ -420,7 +427,8 @@ export function Markdown({
   renderMention,
   renderImage,
   renderFileCard,
-  cdnDomain
+  cdnDomain,
+  bare = false,
 }: MarkdownProps): React.JSX.Element {
   const components = React.useMemo(
     () => createComponents(mode, onUrlClick, onFileClick, renderMention, renderImage, renderFileCard),
@@ -438,16 +446,24 @@ export function Markdown({
     [children, cdnDomain]
   )
 
+  const rendered = (
+    <ReactMarkdown
+      remarkPlugins={[remarkMath, remarkBreaks, [remarkGfm, { singleTilde: false }]]}
+      rehypePlugins={[rehypeRaw, [rehypeSanitize, sanitizeSchema], rehypeKatex]}
+      urlTransform={urlTransform}
+      components={components}
+    >
+      {processedContent}
+    </ReactMarkdown>
+  )
+
+  if (bare) {
+    return rendered
+  }
+
   return (
     <div className={cn('markdown-content break-words', className)}>
-      <ReactMarkdown
-        remarkPlugins={[remarkMath, remarkBreaks, [remarkGfm, { singleTilde: false }]]}
-        rehypePlugins={[rehypeRaw, [rehypeSanitize, sanitizeSchema], rehypeKatex]}
-        urlTransform={urlTransform}
-        components={components}
-      >
-        {processedContent}
-      </ReactMarkdown>
+      {rendered}
     </div>
   )
 }

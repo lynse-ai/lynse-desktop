@@ -109,10 +109,12 @@ export const chatPollTiming = {
   maxNetworkFailures: 5,
   maxSubmitRetries: 2,
   submitRetryDelayMs: 2_000,
-  /** Gap between typewriter slices replayed over the finished answer. */
-  typewriterTickMs: 24,
+  /** Gap between typewriter slices replayed over the streamed/finished answer. */
+  typewriterTickMs: 38,
   /** Cap on the whole typewriter playback so long answers do not crawl. */
-  typewriterMaxMs: 4_800,
+  typewriterMaxMs: 10_000,
+  /** Time to accept trailing confirmations after delivering the completed answer. */
+  streamTrailingFramesMs: 1_000,
 };
 
 /** Report-style requests mirror the server's report turn classification
@@ -544,10 +546,12 @@ function submitErrorMessage(error: unknown): string {
 const WORD_SNAP_LOOKAHEAD = 8;
 
 /**
- * Move a slice end onto a character-safe boundary. A cut between the halves of
- * a surrogate pair flashes a broken glyph every tick, and a cut inside a Latin
- * word reads as stutter; CJK has no word ends so only the surrogate rule
- * applies there. `end` is exclusive and below `text.length`.
+ * Move a slice end onto a character- and Markdown-delimiter-safe boundary. A
+ * cut between the halves of a surrogate pair flashes a broken glyph every
+ * tick, a cut inside a Latin word reads as stutter, and splitting right across
+ * repeated Markdown markers (`**`, `###`, ```` ``` ````) flashes raw syntax.
+ * CJK has no word ends so only the surrogate and marker rules apply there.
+ * `end` is exclusive and below `text.length`.
  */
 export function safeSliceEnd(text: string, end: number): number {
   if (end <= 0 || end >= text.length) return end;
@@ -558,6 +562,23 @@ export function safeSliceEnd(text: string, end: number): number {
     const rest = text.slice(end, end + WORD_SNAP_LOOKAHEAD);
     const breakAt = rest.search(/[^\w]/);
     if (breakAt >= 0) end += breakAt + 1;
+  }
+  // Never split inside repeated Markdown syntax tokens (e.g. `**`, `~~`, ```` ``` ````, `###`).
+  const prev = text[end - 1];
+  if (prev && (prev === "*" || prev === "~" || prev === "`" || prev === "#")) {
+    let steps = 0;
+    while (end < text.length && text[end] === prev && steps < 6) {
+      end += 1;
+      steps += 1;
+    }
+    // Heading hashes (`### `) at line start: include the trailing space so the
+    // line renders as a heading immediately rather than flashing literal `###`.
+    if (prev === "#" && end < text.length && text[end] === " ") {
+      const lineStart = text.lastIndexOf("\n", end - 1) + 1;
+      if (/^[ \t]*#{1,6}$/.test(text.slice(lineStart, end))) {
+        end += 1;
+      }
+    }
   }
   return Math.min(end, text.length);
 }
@@ -597,6 +618,124 @@ function sleep(ms: number, cancelled: () => boolean, wakeOnForeground = false): 
     };
     tick();
   });
+}
+
+/**
+ * Smooths bursty SSE / streaming text chunks into a calm, readable Markdown
+ * typewriter cadence. Fast models or buffering proxies often flush dozens or
+ * hundreds of characters at once; pacing releases them smoothly on safe
+ * character/Markdown boundaries while keeping first-token latency at zero.
+ *
+ * When `typewriterMaxMs <= typewriterTickMs` (e.g. unit tests shrinking timers
+ * to 1 ms), the pacer acts as a synchronous pass-through with zero timers.
+ */
+class StreamTextPacer {
+  private buffer = "";
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private drainDeadline: number | null = null;
+  private flushResolvers: Array<() => void> = [];
+  private readonly emitDelta: (delta: string) => void;
+  private readonly isAborted: () => boolean;
+
+  constructor(emitDelta: (delta: string) => void, isAborted: () => boolean) {
+    this.emitDelta = emitDelta;
+    this.isAborted = isAborted;
+  }
+
+  get enabled(): boolean {
+    return chatPollTiming.typewriterMaxMs > chatPollTiming.typewriterTickMs;
+  }
+
+  get hasPending(): boolean {
+    return this.buffer.length > 0 || this.timer !== null;
+  }
+
+  push(delta: string): void {
+    if (!delta || this.isAborted()) return;
+    if (!this.enabled) {
+      this.emitDelta(delta);
+      return;
+    }
+    this.buffer += delta;
+    if (!this.timer) {
+      this.step();
+    }
+  }
+
+  /** Wait until all queued text has been emitted smoothly (capped by typewriterMaxMs). */
+  drain(): Promise<void> {
+    if (this.isAborted() || !this.buffer) {
+      return Promise.resolve();
+    }
+    this.drainDeadline ??= performance.now() + chatPollTiming.typewriterMaxMs;
+    return new Promise<void>((resolve) => {
+      this.flushResolvers.push(resolve);
+      if (!this.timer) {
+        this.step();
+      }
+    });
+  }
+
+  /** Stop immediately without emitting remaining buffered characters. */
+  stop(): void {
+    this.drainDeadline = null;
+    this.buffer = "";
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    this.resolveDrain();
+  }
+
+  /** Keep received text visible if the reader fails or falls back to polling. */
+  flush(): void {
+    const remaining = this.buffer;
+    this.stop();
+    if (remaining && !this.isAborted()) this.emitDelta(remaining);
+  }
+
+  private resolveDrain(): void {
+    if (this.flushResolvers.length === 0) return;
+    const resolvers = this.flushResolvers;
+    this.flushResolvers = [];
+    for (const resolve of resolvers) resolve();
+  }
+
+  private step(): void {
+    this.timer = null;
+    if (this.isAborted() || !this.buffer) {
+      this.stop();
+      return;
+    }
+
+    const tickMs = Math.max(1, chatPollTiming.typewriterTickMs);
+    const backlog = this.buffer.length;
+    let sliceSize: number;
+    if (backlog <= 24) {
+      sliceSize = 1;
+    } else if (backlog <= 80) {
+      sliceSize = 2;
+    } else if (backlog <= 180) {
+      sliceSize = 3;
+    } else {
+      sliceSize = Math.max(4, Math.ceil(backlog / 55));
+    }
+    if (this.drainDeadline !== null) {
+      const ticksLeft = Math.max(1, Math.floor((this.drainDeadline - performance.now()) / tickMs));
+      sliceSize = Math.max(sliceSize, Math.ceil(backlog / ticksLeft));
+    }
+
+    const cut = safeSliceEnd(this.buffer, Math.min(sliceSize, backlog));
+    const slice = this.buffer.slice(0, cut);
+    this.buffer = this.buffer.slice(cut);
+    this.emitDelta(slice);
+
+    if (this.buffer && !this.isAborted()) {
+      this.timer = setTimeout(() => this.step(), tickMs);
+    } else {
+      this.stop();
+    }
+  }
 }
 
 interface ProgressCursor { sequence: number; at: number; length: number }
@@ -1106,33 +1245,83 @@ export class StreamChatTransport implements ChatTransport {
       if (event.type === "content" && event.delta) hasPartialText = true;
       opts.onEvent(event);
     };
+    const pacer = new StreamTextPacer(
+      (delta) => emit({ type: "content", delta }),
+      () => turn.signal.aborted,
+    );
+    const stopPacer = () => pacer.stop();
+    turn.signal.addEventListener("abort", stopPacer, { once: true });
+    const deferredTerminalEvents: ChatStreamEvent[] = [];
+    let doneDelivery: Promise<void> | undefined;
     const deadline = setTimeout(() => {
-      if (!terminal) emit({ type: "error", message: "回复生成超时，请重新发送" });
-      turn.abort();
+      if (!terminal) {
+        pacer.flush();
+        emit({ type: "error", message: "回复生成超时，请重新发送" });
+        turn.abort();
+      }
     }, turnPollDeadlineMs(opts.query));
 
     try {
       if (turn.signal.aborted) return;
       const recall = hydrateDesktopContext(opts);
-    if (recall) await recall;
+      if (recall) await recall;
       if (turn.signal.aborted) return;
       const body = chatTurnBody(opts);
       emit({ type: "status", text: "submitting" });
       for (let attempt = 0; !turn.signal.aborted; attempt += 1) {
-        const result = await this.streamAttempt(body, turn.signal, (payload) => {
+        const result = await this.streamAttempt(body, turn.signal, (payload, closeAfterDone) => {
           try {
             const frame = JSON.parse(payload) as Record<string, unknown> | null;
             taskId = firstString(frame?.task_id, frame?.taskId) ?? taskId;
           } catch { /* Raw text deltas do not carry a task id. */ }
-          const events = parseChatStreamData(payload);
-          for (const event of events) {
-            // The server may send the confirmation after done. Keep that
-            // frame, but never turn a completed answer into a network error.
-            if (!terminal || event.type === "confirm") emit(event);
+          for (const event of parseChatStreamData(payload)) {
+            if (event.type === "error") {
+              if (!terminal) {
+                pacer.flush();
+                emit(event);
+              }
+              return true;
+            }
+            if (event.type === "confirm") {
+              if (deferredTerminalEvents.length > 0) deferredTerminalEvents.push(event);
+              else emit(event);
+              continue;
+            }
+            if (terminal) continue;
+
+            if (event.type === "content") {
+              pacer.push(event.delta);
+              continue;
+            }
+            if (event.type === "done") {
+              terminal = true;
+              // If the SSE endpoint delivered the full answer only in `done`
+              // without prior `content` deltas, replay it smoothly as well.
+              if (!hasPartialText && event.text && pacer.enabled) {
+                pacer.push(event.text);
+              }
+              if (pacer.hasPending) {
+                deferredTerminalEvents.push(event);
+                doneDelivery = pacer.drain().then(() => {
+                  for (const pending of deferredTerminalEvents) emit(pending);
+                  deferredTerminalEvents.length = 0;
+                });
+              } else {
+                emit(event);
+              }
+              closeAfterDone(doneDelivery);
+              continue;
+            }
+            emit(event);
           }
-          return events.some((event) => event.type === "error");
+          return false;
         });
-        if (turn.signal.aborted || terminal) return;
+        if (turn.signal.aborted) return;
+        if (terminal) {
+          await doneDelivery;
+          return;
+        }
+        pacer.flush();
 
         if (!result.receivedFrame && isBusySubmitError(result.error)) {
           if (attempt >= chatPollTiming.maxSubmitRetries) {
@@ -1188,6 +1377,8 @@ export class StreamChatTransport implements ChatTransport {
       }
     } finally {
       clearTimeout(deadline);
+      pacer.stop();
+      turn.signal.removeEventListener("abort", stopPacer);
       turn.signal.removeEventListener("abort", cancelTask);
       opts.signal?.removeEventListener("abort", abort);
       if (this.turnController === turn) this.turnController = null;
@@ -1202,19 +1393,26 @@ export class StreamChatTransport implements ChatTransport {
   private streamAttempt(
     body: Record<string, unknown>,
     signal: AbortSignal,
-    onChunk: (payload: string) => boolean,
+    onChunk: (payload: string, closeAfterDone: (delivery?: Promise<void>) => void) => boolean,
   ): Promise<{ error?: unknown; receivedFrame: boolean }> {
     return new Promise((resolve) => {
       let settled = false;
       let receivedFrame = false;
       let controller: AbortController | null = null;
+      let closeTimer: ReturnType<typeof setTimeout> | undefined;
       const finish = (error?: unknown) => {
         if (settled) return;
         settled = true;
+        if (closeTimer !== undefined) clearTimeout(closeTimer);
         signal.removeEventListener("abort", abort);
         if (this.streamController === controller) this.streamController = null;
         controller?.abort();
         resolve({ error, receivedFrame });
+      };
+      const closeAfterDone = (delivery = Promise.resolve()) => {
+        void delivery.then(() => {
+          if (!settled) closeTimer = setTimeout(finish, chatPollTiming.streamTrailingFramesMs);
+        }, finish);
       };
       const abort = () => finish();
       signal.addEventListener("abort", abort, { once: true });
@@ -1226,7 +1424,7 @@ export class StreamChatTransport implements ChatTransport {
             if (settled || signal.aborted) return;
             if (payload) receivedFrame = true;
             // Explicit backend errors are terminal even if the socket stays open.
-            if (onChunk(payload)) finish();
+            if (onChunk(payload, closeAfterDone)) finish();
           },
           (error) => finish(error),
           () => finish(),

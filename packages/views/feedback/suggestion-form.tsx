@@ -28,6 +28,7 @@ import {
   type FeedlogTransport,
 } from "@lynse/core/api";
 import { getAppInfoSync } from "../app-update";
+import { formatAppVersionFull } from "../app-version";
 import { getDesktopDiagnosticsApi } from "../diagnostics";
 import { ensureFeedlogGuestToken, storeFeedlogGuestToken } from "./guest-token";
 
@@ -70,7 +71,7 @@ export function FeatureSuggestionForm(props: { onSubmitted?: () => void }) {
       meta.push(`${t("settings.feedback_module_label")}: ${t(`settings.feedback_module_${module_}`)}`);
     }
     if (appInfo) {
-      meta.push(`Lynse ${appInfo.version} · ${appInfo.platform}`);
+      meta.push(`Lynse ${formatAppVersionFull(appInfo).replace(/^v/, "")} · ${appInfo.platform}`);
     }
     if (!anonymous && user?.name) {
       meta.push(`${t("settings.feedback_identity_label")} ${user.name}`);

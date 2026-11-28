@@ -60,15 +60,34 @@ export type ContextPreferencesChange =
 
 const DEFAULT_CONTEXT_TIMEZONE = "Asia/Shanghai";
 
-/** IANA zone of this device; the server rejects abbreviations such as "CST", so only region names or UTC pass. */
-export function deviceTimeZone(): string {
-  try {
-    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    if (zone && (zone.includes("/") || zone === "UTC")) return zone;
-  } catch {
-    // Older engines may not expose resolvedOptions().timeZone.
+const IANA_ZONE = /^[A-Za-z_]+(?:\/[A-Za-z0-9_+-]+)+$/;
+
+/**
+ * A timezone the Lynclaw agent accepts: "UTC" or an IANA `Area/Location`
+ * name. Abbreviations ("PST", "CST") and fixed offsets ("GMT+08:00",
+ * "UTC-5") are rejected with HTTP 422, so they return undefined and the
+ * caller omits the field. Without an argument the device zone is checked.
+ */
+export function safeLynclawTimezone(raw?: string | null): string | undefined {
+  let zone = raw;
+  if (zone === undefined) {
+    try {
+      zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    } catch {
+      // Older engines may not expose resolvedOptions().timeZone.
+      return undefined;
+    }
   }
-  return DEFAULT_CONTEXT_TIMEZONE;
+  const value = (zone ?? "").trim();
+  if (!value) return undefined;
+  if (value.toUpperCase() === "UTC") return "UTC";
+  if (/^(?:GMT|UTC)[+-]/i.test(value)) return undefined;
+  return IANA_ZONE.test(value) ? value : undefined;
+}
+
+/** IANA zone of this device, falling back to the server default when the zone is unusable. */
+export function deviceTimeZone(): string {
+  return safeLynclawTimezone() ?? DEFAULT_CONTEXT_TIMEZONE;
 }
 
 function requestOptions(sessionToken: string, signal?: AbortSignal) {

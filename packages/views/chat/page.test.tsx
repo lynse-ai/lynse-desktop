@@ -177,6 +177,30 @@ describe("ChatPage", () => {
     expect(link.hasAttribute("target")).toBe(false);
   });
 
+  it("copies the support email automatically when desktop mail launch fails", async () => {
+    const openExternal = vi.fn().mockRejectedValue(new Error("no mail client"));
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("desktopAPI", { openExternal });
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    chat.messages = [{
+      id: "support-reply",
+      role: "assistant",
+      content: "Please email Lynse Support using the address below.",
+      timestamp: Date.now(),
+      humanSupportLink: { url: "mailto:support@lynse.ai", label: "support@lynse.ai" },
+    }];
+    render(<ChatPage />);
+
+    fireEvent.click(screen.getByRole("link", { name: "support@lynse.ai" }));
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith("support@lynse.ai");
+      expect(toastMock.error).toHaveBeenCalledWith('chat.open_support_email_copied {"email":"support@lynse.ai"}');
+    });
+  });
+
   it("hands waiting feedback over to reasoning and retires it when the turn finishes", () => {
     const message = { id: "a1", role: "assistant", content: "", timestamp: Date.now() };
     chat.messages = [message];

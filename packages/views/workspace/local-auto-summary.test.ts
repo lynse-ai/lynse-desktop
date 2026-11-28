@@ -37,6 +37,7 @@ beforeEach(() => {
   client = new ApiClient("https://business.invalid");
   client.setAgentBaseUrl("https://agent.invalid");
   client.setToken("test-session");
+  vi.spyOn(client, "ensureAgentSession").mockResolvedValue(undefined);
   setApiInstance(client);
   setApiTransportMode("direct");
   fetchMock = vi.fn();

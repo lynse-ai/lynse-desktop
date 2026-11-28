@@ -1,5 +1,4 @@
-import i18next from "i18next";
-import { matchLocale } from "@lynse/core/i18n";
+import { currentLynclawLanguage } from "@lynse/core/i18n";
 import type { DesktopContext } from "../workbench/types";
 import type {
   ChatProvider,
@@ -10,7 +9,7 @@ import type {
   ChatHumanSupportLink,
   WorkBuddyCloudSession,
 } from "./types";
-import { api, ApiError, normalizeConnectionRequest, type ConnectorConnectionRequest } from "@lynse/core/api";
+import { api, ApiError, normalizeConnectionRequest, safeLynclawTimezone, type ConnectorConnectionRequest } from "@lynse/core/api";
 import type { RequestModelOverride } from "./model-override";
 
 export interface SendChatOptions {
@@ -67,6 +66,13 @@ const chatStreamPath = () =>
 const chatPollTaskPath = (taskId: string) =>
   `${chatPollPath()}/${encodeURIComponent(taskId)}`;
 
+/** Poll status and cancel replies carry localized copy; pass the UI language when known. */
+function withLanguageQuery(path: string): string {
+  const language = currentLynclawLanguage();
+  if (!language) return path;
+  return `${path}${path.includes("?") ? "&" : "?"}language=${encodeURIComponent(language)}`;
+}
+
 /**
  * Route B: the assistant can be pointed at a dedicated agent backend
  * (lynse_agent_api_url, set in Settings → AI Assistant) and connect straight
@@ -121,8 +127,11 @@ export const chatPollTiming = {
  * (lynclaw `is_report_style_message`): they fetch a whole period of meetings
  * and get the extended `LYNCLAW_HTTP_REPORT_TURN_TIMEOUT_SECONDS` budget.
  * HTML / 图文报告 render through generate_visual_summary (Chromium) and are
- * equally slow, so they ride the same extended deadline. */
-const REPORT_QUERY_TOKENS = ["周报", "月报", "季报", "季度报告", "HTML", "html", "图文报告"] as const;
+ * equally slow, so they ride the same extended deadline. English requests
+ * ("weekly report", "monthly summary", "visual summary", "HTML") match
+ * case-insensitively; a longer deadline is only a ceiling, so erring wide is safe. */
+const REPORT_QUERY_TOKENS = ["周报", "月报", "季报", "季度报告", "图文报告"] as const;
+const REPORT_QUERY_PATTERN = /\b(?:reports?|weekly|monthly|quarterly|html)\b|\bvisual\s+(?:summary|report)\b/i;
 
 /**
  * Poll deadline for one turn: report-style queries get the extended report
@@ -131,7 +140,7 @@ const REPORT_QUERY_TOKENS = ["周报", "月报", "季报", "季度报告", "HTML
  */
 export function turnPollDeadlineMs(query?: string | null): number {
   const text = String(query ?? "");
-  return REPORT_QUERY_TOKENS.some((token) => text.includes(token))
+  return REPORT_QUERY_TOKENS.some((token) => text.includes(token)) || REPORT_QUERY_PATTERN.test(text)
     ? chatPollTiming.reportDeadlineMs
     : chatPollTiming.deadlineMs;
 }
@@ -214,8 +223,12 @@ function hydrateDesktopContext(opts: SendChatOptions): Promise<void> | undefined
 function chatTurnBody(opts: SendChatOptions): Record<string, unknown> {
   const { query, sessionId, fileIds, userSpecifiedFile, token, confirmToken, modelOverride } = opts;
   const body: Record<string, unknown> = { query };
-  const language = matchLocale(i18next.resolvedLanguage ?? i18next.language ?? "");
+  // Both fields are omitted when unknown or invalid: the agent rejects
+  // unsupported values with 422 and otherwise falls back to the gateway default.
+  const language = currentLynclawLanguage();
   if (language) body.language = language;
+  const timezone = safeLynclawTimezone();
+  if (timezone) body.timezone = timezone;
   if (opts.requestId) body.requestId = opts.requestId;
   if (sessionId) body.sessionId = sessionId;
   if (token) body.token = token;
@@ -293,6 +306,8 @@ export async function refreshAttachmentUrl(
   const body: Record<string, unknown> = {};
   if (opts.userId) body.user_id = opts.userId;
   if (token) body.token = token;
+  const language = currentLynclawLanguage();
+  if (language) body.language = language;
 
   try {
     const res = await api().post<Record<string, unknown>>(
@@ -902,7 +917,7 @@ export class PollChatTransport implements ChatTransport {
       let notFound = false;
       let networkError: unknown;
       try {
-        data = await this.getTask(chatPollTaskPath(taskId));
+        data = await this.getTask(withLanguageQuery(chatPollTaskPath(taskId)));
       } catch (error) {
         if (error instanceof ApiError && error.status === 404) notFound = true;
         else networkError = error;
@@ -1233,7 +1248,7 @@ export class StreamChatTransport implements ChatTransport {
       try {
         // A dropped reader must not cancel a recoverable task; only the turn's
         // explicit abort (Stop, account switch or deadline) calls this endpoint.
-        void Promise.resolve(api().post(`${chatPollTaskPath(taskId)}/cancel`, {}, {
+        void Promise.resolve(api().post(withLanguageQuery(`${chatPollTaskPath(taskId)}/cancel`), {}, {
           baseUrl: chatAgentBaseUrl(), sessionToken: opts.token ?? undefined,
         })).catch(() => {});
       } catch { /* Best effort; server timeout still bounds the worker. */ }

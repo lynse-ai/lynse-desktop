@@ -3,6 +3,9 @@ import { initReactI18next } from "react-i18next";
 import type { Resource } from "i18next";
 import { getEffectiveEdition } from "../config";
 
+export { LYNCLAW_LANGUAGES, currentLynclawLanguage, resolveLynclawLanguage } from "./lynclaw-language";
+export type { LynclawLanguage } from "./lynclaw-language";
+
 export const DEFAULT_LOCALE = "en";
 export const SUPPORTED_LOCALES = ["en", "zh-Hans", "zh-Hant", "ja", "ko"] as const;
 export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];

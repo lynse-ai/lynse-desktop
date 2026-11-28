@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import i18next from "i18next";
 import { ApiClient, setApiInstance, setApiTransportMode } from "./client";
 import { generateChapters } from "./chapters";
 
@@ -9,6 +10,7 @@ beforeEach(() => {
   client.setAgentBaseUrl("https://agent.invalid");
   client.setToken("test-session");
   client.setApiKey("test-api-key");
+  vi.spyOn(client, "ensureAgentSession").mockResolvedValue(undefined);
   setApiInstance(client);
   setApiTransportMode("direct");
   fetchMock = vi.fn();
@@ -61,5 +63,20 @@ describe("generateChapters", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ model: "x" })));
     await expect(generateChapters({ utterances }, "test-session")).rejects.toThrow("unavailable");
+  });
+
+  it("falls back to the active UI language when input language is auto or omitted", async () => {
+    const previousLanguage = i18next.resolvedLanguage;
+    i18next.resolvedLanguage = "zh-Hant";
+    try {
+      fetchMock.mockResolvedValue(new Response(JSON.stringify({ model: null, prompt_version: "v1", chapters: [] })));
+      await generateChapters({ utterances, language: "auto" }, "test-session");
+      expect(JSON.parse(fetchMock.mock.calls[0]?.[1].body)).toEqual({
+        utterances,
+        language: "zh-hant",
+      });
+    } finally {
+      i18next.resolvedLanguage = previousLanguage;
+    }
   });
 });

@@ -7,6 +7,7 @@ import {
   type MeetingNotes,
 } from "@lynse/core/api";
 import { api as coreApi } from "@lynse/core/api";
+import { resolveLynclawLanguage } from "@lynse/core/i18n";
 import { getDesktopLiveTranslationApi } from "../desktop-api";
 import { getDesktopLocalTranscriptionApi } from "../../workspace/local-transcription";
 
@@ -66,7 +67,7 @@ interface SessionEngine {
   inFlight: boolean;
   pendingFinal: boolean;
   finalized: boolean;
-  language: string;
+  language?: string;
   lines: LineInput[];
   freshSince: Map<string, number>;
   timer: ReturnType<typeof setInterval> | null;
@@ -238,7 +239,7 @@ function ensureEngine(sessionId: string): SessionEngine {
     inFlight: false,
     pendingFinal: false,
     finalized: false,
-    language: "zh",
+    language: undefined,
     lines: [],
     freshSince: new Map(),
     timer: null,
@@ -270,10 +271,10 @@ function tick(engine: SessionEngine): void {
 }
 
 /** Feed the current final lines into the engine; starts timers on first call. */
-export function feedLiveNotes(sessionId: string, lines: LineInput[], language: string): void {
+export function feedLiveNotes(sessionId: string, lines: LineInput[], language?: string): void {
   const engine = ensureEngine(sessionId);
   engine.lines = lines;
-  engine.language = language || "zh";
+  engine.language = resolveLynclawLanguage(language);
   // A session resuming after app restart rebuilds engines empty; don't resend
   // lines already folded into a restored notes payload (none restored today —
   // covered stays 0 and the first update rebuilds from the overlap window).
@@ -356,7 +357,7 @@ export function useLiveNotes(args: UseLiveNotesArgs): LiveNotesState {
   );
   const lines = useMemo(() => toLineInputs(segments), [segments]);
   const linesKey = lines.length;
-  const lang = language ?? "zh";
+  const lang = resolveLynclawLanguage(language);
   useEffect(() => {
     if (!sessionId || !active) return;
     feedLiveNotes(sessionId, lines, lang);

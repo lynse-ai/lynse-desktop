@@ -1,4 +1,6 @@
+import i18next from "i18next";
 import { API_PROXY_PREFIX } from "../config";
+import { currentLynclawLanguage } from "../i18n/lynclaw-language";
 
 type ClientOptions = {
   onUnauthorized?: () => void;
@@ -67,6 +69,58 @@ function withAbort<T>(promise: Promise<T>, signal?: AbortSignal | null): Promise
     });
     if (signal.aborted) abort();
   });
+}
+
+/**
+ * Pull the human-readable message out of an error body. Order follows the
+ * shared contract: FastAPI `detail` string, FastAPI 422 `detail[0].msg`,
+ * Lynclaw `error`, then the gateway `{ code, msg | message, data }` envelope.
+ * Returns an empty object for bodies that are not JSON or carry none of these.
+ */
+export function parseErrorBody(body: string): { message?: string; data?: unknown } {
+  let json: unknown;
+  try {
+    json = JSON.parse(body);
+  } catch {
+    return {};
+  }
+  if (!json || typeof json !== "object" || Array.isArray(json)) return {};
+  const record = json as Record<string, unknown>;
+  if (typeof record.detail === "string" && record.detail.trim()) return { message: record.detail };
+  if (Array.isArray(record.detail)) {
+    const first: unknown = record.detail[0];
+    if (first && typeof first === "object" && typeof (first as { msg?: unknown }).msg === "string") {
+      const msg = (first as { msg: string }).msg;
+      if (msg.trim()) return { message: msg };
+    }
+  }
+  if (typeof record.error === "string" && record.error.trim()) return { message: record.error };
+  if (typeof record.msg === "string" && record.msg) return { message: record.msg, data: record.data };
+  if (typeof record.message === "string" && record.message) return { message: record.message, data: record.data };
+  return {};
+}
+
+/** Lynclaw routes bound to the login token's gateway via `/api/session/backend`. */
+const AGENT_SESSION_PATH = /^\/api\/(?:chat|summarize|chapters|notes|attachments)(?:[/?]|$)/;
+
+/** Generic transport phrases that say nothing a user can act on. */
+const GENERIC_ERROR_TEXT = new Set(["unauthorized", "forbidden", "bad request", "not found", "method not allowed"]);
+
+/** A server message worth showing as-is: localized prose, not a code or a raw body. */
+function readableServerMessage(message: string): string | null {
+  const text = message.trim();
+  if (!text || text.length > 300 || /^[{[<]/.test(text)) return null;
+  if (GENERIC_ERROR_TEXT.has(text.toLowerCase())) return null;
+  if (/^[a-z0-9_-]+(\.[a-z0-9_-]+)+$/i.test(text)) return null;
+  return text;
+}
+
+/** Localized assistant-session copy; core cannot import the views locale bundles directly. */
+function agentSessionText(key: string, fallback: string): string {
+  if (!i18next.isInitialized) return fallback;
+  const translate = i18next.t.bind(i18next) as (key: string, options: { defaultValue: string }) => unknown;
+  const text = translate(`chat.${key}`, { defaultValue: fallback });
+  return typeof text === "string" && text.trim() ? text : fallback;
 }
 
 export class ApiClient {
@@ -175,6 +229,9 @@ export class ApiClient {
   }
 
   private async registerAgentSession(host: string, agentUrl: string, token: string, signal: AbortSignal): Promise<void> {
+    // Lets the agent localize a binding failure; omitted when the UI language is unknown.
+    const language = currentLynclawLanguage();
+    const body = JSON.stringify(language ? { host, language } : { host });
     for (let attempt = 0; ; attempt += 1) {
       const controller = new AbortController();
       const abort = () => controller.abort();
@@ -185,24 +242,31 @@ export class ApiClient {
       try {
         if (controller.signal.aborted) throw new DOMException("Request aborted", "AbortError");
         const result = await withAbort(this.request<{ host: string; user_id: string }>("/api/session/backend", {
-          method: "POST", body: JSON.stringify({ host }), baseUrl: agentUrl,
+          method: "POST", body, baseUrl: agentUrl,
           tokenOnly: true, sessionToken: token, authScope: "assistant", signal: controller.signal,
         }), controller.signal);
         if (result?.host?.replace(/\/+$/, "") !== host || !result?.user_id?.trim()) {
-          throw new ApiError(412, "助手未能确认当前服务器，请稍后重试");
+          throw new ApiError(412, agentSessionText("agent_session_unconfirmed", "The assistant couldn't confirm this server. Try again shortly."));
         }
         return;
       } catch (error) {
         if (signal.aborted) throw new DOMException("Request aborted", "AbortError");
         retry = attempt < 2 && (!(error instanceof ApiError) || error.status === 429 || (error.status >= 500 && error.status < 600));
         if (!retry) {
-          const message = error instanceof ApiError && error.status === 400
-            ? "助手无法连接当前服务器，请检查助手的服务器配置"
-            : error instanceof ApiError && [404, 405].includes(error.status)
-              ? "助手服务需要更新，请更新后重试"
-            : error instanceof ApiError && [401, 403, 2000, 2013].includes(error.status)
-              ? "助手登录验证失败，请重新登录后重试"
-              : "助手连接尚未完成，请稍后重试";
+          const status = error instanceof ApiError ? error.status : 0;
+          // Lynclaw localizes whitelist (400) and expired-session (401/403)
+          // details into the requested language; keep those verbatim.
+          const serverMessage = error instanceof ApiError && [400, 401, 403, 412].includes(status)
+            ? readableServerMessage(error.message)
+            : null;
+          const message = serverMessage
+            ?? (status === 400
+              ? agentSessionText("agent_session_server_rejected", "The assistant can't connect to this server. Check the assistant's server settings.")
+              : [404, 405].includes(status)
+                ? agentSessionText("agent_session_update_required", "The assistant service needs an update. Update and try again.")
+                : [401, 403, 2000, 2013].includes(status)
+                  ? agentSessionText("agent_session_auth_failed", "The assistant couldn't verify your sign-in. Sign in again and retry.")
+                  : agentSessionText("agent_session_pending", "The assistant isn't connected yet. Try again shortly."));
           // A terminal preflight error must not trigger stream-to-poll resubmission.
           throw new ApiError(412, message);
         }
@@ -228,8 +292,9 @@ export class ApiClient {
     }
   }
 
+  /** Identity-bound agent routes wait for the login's gateway binding; the binding call itself never does. */
   private isAgentChat(path: string, baseUrl: string) {
-    return !!this.agentBaseUrl && baseUrl === this.agentBaseUrl && /^\/api\/chat(?:\/|$)/.test(path);
+    return !!this.agentBaseUrl && baseUrl === this.agentBaseUrl && AGENT_SESSION_PATH.test(path);
   }
 
   private async waitForAgentSession(revision: number, signal?: AbortSignal | null) {
@@ -303,27 +368,11 @@ export class ApiClient {
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       this.requireCurrentRequest(revision, init.signal);
-      // Gateways often wrap failures in the same { code, msg } envelope even
-      // with a non-200 HTTP status — surface `msg` instead of the raw JSON.
-      let message = body || res.statusText;
-      let data: unknown;
-      try {
-        const json = JSON.parse(body) as {
-          msg?: unknown;
-          message?: unknown;
-          data?: unknown;
-        };
-        if (typeof json.msg === "string" && json.msg) {
-          message = json.msg;
-          data = json.data;
-        } else if (typeof json.message === "string" && json.message) {
-          message = json.message;
-          data = json.data;
-        }
-      } catch {
-        // Not JSON — keep the raw body as the message.
-      }
-      throw new ApiError(res.status, message, data);
+      // Lynclaw answers with FastAPI `detail`; gateways wrap failures in the
+      // { code, msg } envelope even with a non-200 status. Surface the text,
+      // never the raw JSON.
+      const parsed = parseErrorBody(body);
+      throw new ApiError(res.status, parsed.message ?? (body || res.statusText), parsed.data);
     }
     if (res.status === 204) return undefined as T;
     const json = responseType === "blob" ? await res.blob() : await res.json();
@@ -465,7 +514,8 @@ export class ApiClient {
         if (!res.ok) {
           const text = await res.text().catch(() => "");
           this.requireCurrentRequest(revision, controller.signal);
-          throw new ApiError(res.status, text || res.statusText);
+          const parsed = parseErrorBody(text);
+          throw new ApiError(res.status, parsed.message ?? (text || res.statusText), parsed.data);
         }
 
         reader = res.body?.getReader();

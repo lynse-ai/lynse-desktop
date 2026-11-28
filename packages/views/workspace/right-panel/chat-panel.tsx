@@ -1,11 +1,12 @@
 "use client";
 
 import { useRef, useLayoutEffect, useState, useMemo } from "react";
-import { X, Send, FileText, Plus, Square, Clock, Image as ImageIcon, Headphones, Copy, Check } from "../../icons";
+import { X, Send, FileText, Plus, Square, Clock, Image as ImageIcon, Copy, Check } from "../../icons";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Input } from "@lynse/ui/components/ui/input";
 import { useAutoScroll } from "@lynse/ui/hooks/use-auto-scroll";
 import { ChatReplyBody } from "../../chat/chat-reply-body";
+import { ChatHumanSupportCard } from "../../chat/chat-human-support-card";
 import { AssistantAvatar } from "../../assistant";
 import { useTranslation } from "@lynse/core/i18n/react";
 
@@ -295,19 +296,7 @@ export function ChatPanel() {
                     {msg.content && msg.status && showActivity && (
                       <ChatActivity status={msg.status} startedAt={msg.timestamp} className="mt-2 text-3xs" />
                     )}
-                    {msg.humanSupportLink?.url && (
-                      <a
-                        href={msg.humanSupportLink.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className={`mt-2 flex w-fit items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-3xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent ${
-                          revealed ? "animate-in fade-in duration-300 delay-[350ms] fill-mode-backwards" : ""
-                        }`}
-                      >
-                        <Headphones className="size-3 shrink-0 text-primary/70" />
-                        {msg.humanSupportLink.label?.trim() || t("chat.contact_support")}
-                      </a>
-                    )}
+                    <ChatHumanSupportCard link={msg.humanSupportLink} revealed={revealed} compact />
                     {msg.confirm && (
                       <div className="mt-2">
                         <ConfirmCard

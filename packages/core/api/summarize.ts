@@ -1,4 +1,16 @@
 import { api } from "./client";
+import { currentLynclawLanguage, resolveLynclawLanguage } from "../i18n/lynclaw-language";
+
+/** Ensure recording_started_at carries an explicit timezone offset or UTC Z. */
+function normalizeRecordingStartedAt(raw?: string): string | undefined {
+  const text = raw?.trim();
+  if (!text) return undefined;
+  if (/(?:Z|[+-]\d{2}:?\d{2})$/i.test(text)) {
+    return Number.isFinite(Date.parse(text)) ? text : undefined;
+  }
+  const date = new Date(text.replace(" ", "T"));
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+}
 
 export const SUMMARY_HTML_STYLES = ["editorial", "editorial-dark", "infographic", "document"] as const;
 export type SummaryHtmlStyle = (typeof SUMMARY_HTML_STYLES)[number];
@@ -61,6 +73,8 @@ export async function summarizeTranscript(
   if (!text) throw new Error("Transcript is empty");
   const client = api();
   const html = input.html === true;
+  const language = resolveLynclawLanguage(input.language) ?? currentLynclawLanguage();
+  const recordingStartedAt = normalizeRecordingStartedAt(input.recordingStartedAt);
   const response = await client.post<Partial<SummarizeTranscriptResult>>(
     "/api/summarize",
     {
@@ -69,12 +83,12 @@ export async function summarizeTranscript(
       ...(typeof input.recordingDurationSeconds === "number"
         && Number.isFinite(input.recordingDurationSeconds) && input.recordingDurationSeconds > 0
         ? { recording_duration_seconds: input.recordingDurationSeconds } : {}),
-      ...(input.recordingStartedAt ? { recording_started_at: input.recordingStartedAt } : {}),
+      ...(recordingStartedAt ? { recording_started_at: recordingStartedAt } : {}),
       ...(input.recordMarkResults?.length ? {
         recordMarkResults: input.recordMarkResults.slice(0, MAX_SUMMARY_TEXT_MARKS),
       } : {}),
       ...(input.markImages?.length ? { markImages: input.markImages.slice(0, MAX_SUMMARY_IMAGE_MARKS) } : {}),
-      ...(input.language ? { language: input.language } : {}),
+      ...(language ? { language } : {}),
       html,
       ...(html && input.style ? { style: input.style } : {}),
     },

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiClient, setApiInstance, setApiTransportMode } from "./client";
 import {
   GLOBAL_CONTEXT_SCOPE, actOnContextInbox, deviceTimeZone, downloadContextReview, getContextPreferences,
-  listContextInbox, setContextPreferences,
+  listContextInbox, safeLynclawTimezone, setContextPreferences,
 } from "./context";
 import type { ContextInboxItem } from "./context";
 
@@ -103,13 +103,27 @@ describe("context API session boundary", () => {
     const resolved = vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions");
     resolved.mockReturnValue({ timeZone: "Europe/Berlin" } as Intl.ResolvedDateTimeFormatOptions);
     expect(deviceTimeZone()).toBe("Europe/Berlin");
+    expect(safeLynclawTimezone()).toBe("Europe/Berlin");
     resolved.mockReturnValue({ timeZone: "UTC" } as Intl.ResolvedDateTimeFormatOptions);
     expect(deviceTimeZone()).toBe("UTC");
+    expect(safeLynclawTimezone()).toBe("UTC");
     resolved.mockReturnValue({ timeZone: "CST" } as Intl.ResolvedDateTimeFormatOptions);
     expect(deviceTimeZone()).toBe("Asia/Shanghai");
+    expect(safeLynclawTimezone()).toBeUndefined();
+    resolved.mockReturnValue({ timeZone: "GMT+08:00" } as Intl.ResolvedDateTimeFormatOptions);
+    expect(deviceTimeZone()).toBe("Asia/Shanghai");
+    expect(safeLynclawTimezone()).toBeUndefined();
     resolved.mockImplementation(() => { throw new TypeError("unsupported"); });
     expect(deviceTimeZone()).toBe("Asia/Shanghai");
+    expect(safeLynclawTimezone()).toBeUndefined();
     resolved.mockRestore();
+
+    expect(safeLynclawTimezone("America/Los_Angeles")).toBe("America/Los_Angeles");
+    expect(safeLynclawTimezone("America/Argentina/Buenos_Aires")).toBe("America/Argentina/Buenos_Aires");
+    expect(safeLynclawTimezone("utc")).toBe("UTC");
+    for (const bad of ["", "PST", "EST", "GMT+08:00", "GMT-8", "UTC+8", "UTC-5", "+08:00", null]) {
+      expect(safeLynclawTimezone(bad)).toBeUndefined();
+    }
   });
 
   it("treats HTTP200 domain failures as failures and a closed gate as a business state", async () => {

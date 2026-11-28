@@ -1,4 +1,5 @@
 import { api } from "./client";
+import { currentLynclawLanguage, resolveLynclawLanguage } from "../i18n/lynclaw-language";
 
 /** Structured live meeting notes (lynclaw /api/notes). Shapes mirror the
  *  server contract: every claim cites transcript line ids as evidence, and
@@ -210,13 +211,14 @@ export async function updateMeetingNotes(
 ): Promise<NotesUpdateResult> {
   if (!input.lines.length) throw new Error("Transcript lines are empty");
   const client = api();
+  const language = resolveLynclawLanguage(input.language) ?? currentLynclawLanguage();
   const response = await client.post<NotesResponseRaw>(
     "/api/notes",
     {
       lines: input.lines,
       ...(input.currentNotes ? { current_notes: input.currentNotes } : {}),
       final: input.final === true,
-      ...(input.language ? { language: input.language } : {}),
+      ...(language ? { language } : {}),
     },
     { baseUrl: client.getAgentBaseUrl() ?? client.getBaseUrl(), tokenOnly: true, sessionToken, signal },
   );

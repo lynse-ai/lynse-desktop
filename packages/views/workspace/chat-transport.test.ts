@@ -16,7 +16,7 @@ import {
   turnPollDeadlineMs,
   type SendChatOptions,
 } from "./chat-transport";
-import { ApiError } from "@lynse/core/api";
+import { ApiError, safeLynclawTimezone } from "@lynse/core/api";
 import type { ChatStreamEvent } from "./types";
 import * as workbench from "../workbench/api";
 import type { DesktopWorkbenchApi, DesktopContext, WorkbenchStatus } from "../workbench/types";
@@ -187,6 +187,25 @@ describe("refreshAttachmentUrl", () => {
       { user_id: "user-1", token: "session-token" },
       { baseUrl: undefined },
     );
+  });
+
+  it("includes normalized language when re-signing an attachment url", async () => {
+    const previousLanguage = i18next.resolvedLanguage;
+    i18next.resolvedLanguage = "zh-TW";
+    try {
+      apiMocks.post.mockResolvedValue({
+        artifact_id: artifactId,
+        download_url: "https://signed.example.com/fresh.png",
+      });
+      await refreshAttachmentUrl({ id: artifactId }, { userId: "user-1" });
+      expect(apiMocks.post).toHaveBeenCalledWith(
+        `/api/attachments/${artifactId}/download-url`,
+        { user_id: "user-1", token: "session-token", language: "zh-hant" },
+        { baseUrl: undefined },
+      );
+    } finally {
+      i18next.resolvedLanguage = previousLanguage;
+    }
   });
 
   it("skips attachments without a lynclaw artifact id", async () => {
@@ -547,8 +566,10 @@ describe("PollChatTransport", () => {
     );
 
     const body = apiMocks.post.mock.calls[0]![1] as Record<string, unknown>;
+    const expectedTimezone = safeLynclawTimezone();
     expect(body).toEqual({
       query: "hello",
+      ...(expectedTimezone ? { timezone: expectedTimezone } : {}),
       sessionId: "session-1",
       token: "jwt",
       fileIds: ["f1", "f2"],
@@ -786,6 +807,11 @@ describe("PollChatTransport", () => {
     );
     expect(turnPollDeadlineMs("生成一份html页面展示会议要点")).toBe(chatPollTiming.reportDeadlineMs);
     expect(turnPollDeadlineMs("把10月的会议生成一份图文报告")).toBe(chatPollTiming.reportDeadlineMs);
+    expect(turnPollDeadlineMs("Generate a weekly report for last week")).toBe(chatPollTiming.reportDeadlineMs);
+    expect(turnPollDeadlineMs("Create a Monthly Report")).toBe(chatPollTiming.reportDeadlineMs);
+    expect(turnPollDeadlineMs("Draft a quarterly report")).toBe(chatPollTiming.reportDeadlineMs);
+    expect(turnPollDeadlineMs("Make a visual summary of this meeting")).toBe(chatPollTiming.reportDeadlineMs);
+    expect(turnPollDeadlineMs("Export a visual report")).toBe(chatPollTiming.reportDeadlineMs);
     expect(turnPollDeadlineMs("总结一下昨天那场会")).toBe(chatPollTiming.deadlineMs);
     expect(turnPollDeadlineMs("")).toBe(chatPollTiming.deadlineMs);
     expect(turnPollDeadlineMs(undefined)).toBe(chatPollTiming.deadlineMs);
@@ -1122,9 +1148,11 @@ describe("transport selection by server", () => {
     );
   }
 
-  it("sends the active interface language with poll and stream chat requests", async () => {
+  it("sends the active interface language and valid IANA timezone with poll and stream chat requests", async () => {
     const previousLanguage = i18next.resolvedLanguage;
-    i18next.resolvedLanguage = "en-US";
+    const resolved = vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions")
+      .mockReturnValue({ timeZone: "America/New_York" } as Intl.ResolvedDateTimeFormatOptions);
+    i18next.resolvedLanguage = "zh-TW";
     try {
       apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
       apiMocks.get.mockResolvedValue({ status: "done", text: "ok" });
@@ -1133,9 +1161,37 @@ describe("transport selection by server", () => {
       await new PollChatTransport().send(sendOptions());
       await new StreamChatTransport().send(sendOptions());
 
-      expect(apiMocks.post.mock.calls[0]![1]).toMatchObject({ language: "en" });
-      expect(apiMocks.stream.mock.calls[0]![1]).toMatchObject({ language: "en" });
+      expect(apiMocks.post.mock.calls[0]![1]).toMatchObject({ language: "zh-hant", timezone: "America/New_York" });
+      expect(apiMocks.get.mock.calls[0]![0]).toBe("/api/business/ai/chat/poll/task-1?language=zh-hant");
+      expect(apiMocks.stream.mock.calls[0]![1]).toMatchObject({ language: "zh-hant", timezone: "America/New_York" });
     } finally {
+      resolved.mockRestore();
+      i18next.resolvedLanguage = previousLanguage;
+    }
+  });
+
+  it("omits invalid timezones and unsupported languages from chat requests", async () => {
+    const previousLanguage = i18next.resolvedLanguage;
+    const resolved = vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions");
+    try {
+      apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
+      apiMocks.get.mockResolvedValue({ status: "done", text: "ok" });
+
+      for (const [language, timeZone] of [["auto", "GMT+08:00"], ["nl", "PST"]] as const) {
+        i18next.resolvedLanguage = language;
+        resolved.mockReturnValue({ timeZone } as Intl.ResolvedDateTimeFormatOptions);
+        apiMocks.post.mockClear();
+        apiMocks.get.mockClear();
+
+        await new PollChatTransport().send(sendOptions());
+
+        const body = apiMocks.post.mock.calls[0]![1] as Record<string, unknown>;
+        expect(body).not.toHaveProperty("language");
+        expect(body).not.toHaveProperty("timezone");
+        expect(apiMocks.get.mock.calls[0]![0]).toBe("/api/business/ai/chat/poll/task-1");
+      }
+    } finally {
+      resolved.mockRestore();
       i18next.resolvedLanguage = previousLanguage;
     }
   });

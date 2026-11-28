@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import i18next from "i18next";
 import { ApiClient, setApiInstance, setApiTransportMode } from "./client";
 import { summarizeTranscript } from "./summarize";
 
@@ -9,6 +10,7 @@ beforeEach(() => {
   client.setAgentBaseUrl("https://agent.invalid");
   client.setToken("test-session");
   client.setApiKey("test-api-key");
+  vi.spyOn(client, "ensureAgentSession").mockResolvedValue(undefined);
   setApiInstance(client);
   setApiTransportMode("direct");
   fetchMock = vi.fn();
@@ -54,5 +56,26 @@ describe("summarizeTranscript", () => {
     await expect(summarizeTranscript({ transcriptionText: transcript }, "test-session")).rejects.toThrow("unavailable");
     client.setToken("other-session");
     await expect(summarizeTranscript({ transcriptionText: transcript }, "test-session")).rejects.toThrow("Session changed");
+  });
+
+  it("sanitizes language and normalizes naive recordingStartedAt into ISO-8601", async () => {
+    const previousLanguage = i18next.resolvedLanguage;
+    i18next.resolvedLanguage = "en-US";
+    try {
+      fetchMock.mockResolvedValue(new Response(JSON.stringify({ title: "Sync", content: "## Summary" })));
+      await summarizeTranscript(
+        {
+          transcriptionText: transcript,
+          language: "auto",
+          recordingStartedAt: "2026-04-15 10:00:00",
+        },
+        "test-session",
+      );
+      const body = JSON.parse(fetchMock.mock.calls[0]?.[1].body) as Record<string, unknown>;
+      expect(body.language).toBe("en");
+      expect(body.recording_started_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    } finally {
+      i18next.resolvedLanguage = previousLanguage;
+    }
   });
 });

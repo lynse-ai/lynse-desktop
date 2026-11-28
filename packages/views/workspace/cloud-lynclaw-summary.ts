@@ -1,5 +1,5 @@
 import { api, summarizeTranscript } from "@lynse/core/api";
-import { matchLocale } from "@lynse/core/i18n";
+import { resolveLynclawLanguage } from "@lynse/core/i18n";
 import { cloudTranscriptionToChapterSegments } from "./cloud-chapters";
 import { fetchCloudFileTranscription, fetchFileDetail, parseFileDurationSeconds } from "./hooks/use-files";
 import {
@@ -99,7 +99,7 @@ export async function generateCloudLynclawSummary(
       recordingStartedAt: recordingStart,
       recordMarkResults: marks.text,
       markImages: marks.images,
-      language: matchLocale(language ?? "") ?? undefined,
+      language: resolveLynclawLanguage(language),
       html: format === "html",
     }, sessionToken, controller.signal);
 

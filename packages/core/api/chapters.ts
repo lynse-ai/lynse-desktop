@@ -1,4 +1,5 @@
 import { api } from "./client";
+import { currentLynclawLanguage, resolveLynclawLanguage } from "../i18n/lynclaw-language";
 
 /** One normalized transcript segment sent to the chapter engine. Ids are the
  *  record's own segment ids — the model echoes them back as chapter boundaries
@@ -54,11 +55,12 @@ export async function generateChapters(
 ): Promise<GenerateChaptersResult> {
   if (!input.utterances.length) throw new Error("Transcript is empty");
   const client = api();
+  const language = resolveLynclawLanguage(input.language) ?? currentLynclawLanguage();
   const response = await client.post<ChaptersResponseRaw>(
     "/api/chapters/generate",
     {
       utterances: input.utterances,
-      ...(input.language ? { language: input.language } : {}),
+      ...(language ? { language } : {}),
       ...(input.recordingTime ? { recording_time: input.recordingTime } : {}),
     },
     { baseUrl: client.getAgentBaseUrl() ?? client.getBaseUrl(), tokenOnly: true, sessionToken, signal },

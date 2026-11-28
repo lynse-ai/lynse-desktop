@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError } from "@lynse/core/api";
+import i18next from "i18next";
+import { ApiError, safeLynclawTimezone } from "@lynse/core/api";
 import { StreamChatTransport, chatPollTiming, type SendChatOptions } from "./chat-transport";
 import type { ChatStreamEvent } from "./types";
 
@@ -86,8 +87,10 @@ describe("StreamChatTransport resilience", () => {
     await vi.advanceTimersByTimeAsync(1);
     await sending;
     expect(requests.stream).toHaveBeenCalledTimes(3);
+    const expectedTimezone = safeLynclawTimezone();
     expect(requests.stream.mock.calls.map((call) => call[1])).toEqual(Array(3).fill({
       query: "hello", sessionId: "same-session", token: "jwt", requestId: expect.any(String),
+      ...(expectedTimezone ? { timezone: expectedTimezone } : {}),
       fileIds: ["selected-meeting"], userSpecifiedFile: true,
     }));
     expect(new Set(requests.stream.mock.calls.map((call) => call[1].requestId)).size).toBe(1);
@@ -280,6 +283,24 @@ describe("StreamChatTransport resilience", () => {
       baseUrl: undefined, sessionToken: "jwt",
     });
     expect(requests.get).not.toHaveBeenCalled();
+  });
+
+  it("includes the active language query parameter when cancelling a stream task", async () => {
+    const previousLanguage = i18next.resolvedLanguage;
+    i18next.resolvedLanguage = "en-US";
+    try {
+      queueStream([{ type: "task", task_id: "lang-task" }], "open");
+      requests.post.mockResolvedValue({ status: "canceled" });
+      const transport = new StreamChatTransport();
+      const sending = transport.send(options({ token: "jwt" }));
+      transport.cancel();
+      await sending;
+      expect(requests.post).toHaveBeenCalledWith("/api/business/ai/chat/poll/lang-task/cancel?language=en", {}, {
+        baseUrl: undefined, sessionToken: "jwt",
+      });
+    } finally {
+      i18next.resolvedLanguage = previousLanguage;
+    }
   });
 
   it("cancels busy backoff without retrying", async () => {

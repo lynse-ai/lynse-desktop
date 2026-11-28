@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import i18next from "i18next";
 import { ApiClient, setApiTransportMode } from "./client";
 import { createAuthStore } from "../auth";
 import { CLOUDBASE_AGENT_URL } from "../config";
@@ -222,7 +223,10 @@ describe("CloudBase login binding", () => {
     const complete = vi.fn();
     client.stream("/api/chat/stream", { query: "hello" }, vi.fn(), error, complete, { baseUrl: CLOUDBASE_AGENT_URL });
     await vi.advanceTimersByTimeAsync(0);
-    expect(error).toHaveBeenCalledWith(expect.objectContaining({ status: 412, message: "助手服务需要更新，请更新后重试" }));
+    expect(error).toHaveBeenCalledWith(expect.objectContaining({
+      status: 412,
+      message: "The assistant service needs an update. Update and try again.",
+    }));
     expect(complete).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledOnce();
   });
@@ -249,6 +253,64 @@ describe("CloudBase login binding", () => {
     await client.post("/api/business/ai/chat/poll", {});
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       `${backend}/api/business/customer/current`, `${backend}/api/auth/workbuddy/token`, `${backend}/api/business/ai/chat/poll`,
+    ]);
+  });
+
+  it("extracts FastAPI detail strings and 422 validation errors on non-OK responses", async () => {
+    client.setToken("current-token");
+    fetchMock.mockResolvedValueOnce(Response.json({ detail: "Your session has expired." }, { status: 400 }));
+    await expect(client.get("/api/business/file/page")).rejects.toMatchObject({
+      status: 400,
+      message: "Your session has expired.",
+    });
+
+    fetchMock.mockResolvedValueOnce(Response.json({
+      detail: [{ loc: ["body", "timezone"], msg: "Value error, unsupported timezone", type: "value_error" }],
+    }, { status: 422 }));
+    await expect(client.get("/api/business/file/page")).rejects.toMatchObject({
+      status: 422,
+      message: "Value error, unsupported timezone",
+    });
+  });
+
+  it("sends normalized language during session binding and preserves localized server details", async () => {
+    const previousLanguage = i18next.resolvedLanguage;
+    i18next.resolvedLanguage = "zh-TW";
+    try {
+      fetchMock.mockResolvedValueOnce(Response.json({ detail: "Your session has expired. Please sign in again." }, { status: 401 }));
+      login();
+      await expect(client.post("/api/chat/poll", {}, { baseUrl: CLOUDBASE_AGENT_URL })).rejects.toMatchObject({
+        status: 412,
+        message: "Your session has expired. Please sign in again.",
+      });
+      expect(JSON.parse(fetchMock.mock.calls[0]![1].body)).toEqual({
+        host: backend,
+        language: "zh-hant",
+      });
+    } finally {
+      i18next.resolvedLanguage = previousLanguage;
+    }
+  });
+
+  it.each([
+    "/api/summarize",
+    "/api/chapters/generate",
+    "/api/notes",
+    "/api/attachments/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/download-url",
+  ])("waits for session binding before calling %s on the agent origin", async (path) => {
+    let finish!: (response: Response) => void;
+    fetchMock.mockImplementation((url: string) => url.endsWith("/api/session/backend")
+      ? new Promise<Response>((resolve) => { finish = resolve; })
+      : Promise.resolve(Response.json({ ok: true })));
+    login();
+    const pending = client.post(path, {}, { baseUrl: CLOUDBASE_AGENT_URL, tokenOnly: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    finish(bindingResponse());
+    await pending;
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      `${CLOUDBASE_AGENT_URL}/api/session/backend`,
+      `${CLOUDBASE_AGENT_URL}${path}`,
     ]);
   });
 });

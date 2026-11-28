@@ -19,6 +19,11 @@ on:
           - all
           - windows
           - macos
+      rebuild_stt_runtime:
+        description: "Force rebuilding and re-uploading STT runtime archives even when unchanged"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -86,8 +91,29 @@ jobs:
         # library, does ship with the Xcode command line tools.
         run: brew install meson ninja
 
+      - name: Resolve STT runtime (reuse pinned or rebuild)
+        id: stt_runtime
+        # When fetch-sidecars.sh / verify-sidecar-help.sh / stt.rs RUNTIME_BINARIES
+        # are unchanged and the pinned archive in apps/tauri/stt-runtime.json is
+        # reachable on CloudBase, reuse it directly instead of recompiling
+        # whisper/vibeasr/ffmpeg and re-uploading ~156 MB on every release.
+        shell: bash
+        env:
+          REBUILD_STT_RUNTIME: ${{ inputs.rebuild_stt_runtime == true && 'true' || 'false' }}
+        run: |
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            PLATFORM=macos-aarch64
+          else
+            PLATFORM=windows-x86_64
+          fi
+          ARGS=(--platform "$PLATFORM" --updates-base "$CLOUDBASE_UPDATES_BASE" --github-output "$GITHUB_OUTPUT" --github-env "$GITHUB_ENV")
+          if [[ "$REBUILD_STT_RUNTIME" == "true" ]]; then
+            ARGS+=(--force-rebuild)
+          fi
+          node apps/tauri/scripts/resolve-stt-runtime.cjs "${ARGS[@]}"
+
       - name: Install Vulkan SDK (Windows whisper build)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && steps.stt_runtime.outputs.mode == 'rebuild'
         # The Windows whisper.cpp sidecar is compiled with GGML_VULKAN: one
         # binary serves NVIDIA / AMD / Intel GPUs, and vulkan-1.dll is shipped
         # inside the runtime archive so end users need no separate Vulkan
@@ -188,6 +214,7 @@ jobs:
           }
 
       - name: Verify runtime help checks
+        if: steps.stt_runtime.outputs.mode == 'rebuild'
         run: bash apps/tauri/scripts/test-sidecar-help.sh
 
       - name: Verify prerelease mirror isolation
@@ -195,10 +222,11 @@ jobs:
         run: python apps/tauri/scripts/test-prerelease-mirror.py
 
       - name: Fetch / build STT sidecars
+        if: steps.stt_runtime.outputs.mode == 'rebuild'
         run: bash apps/tauri/scripts/fetch-sidecars.sh
 
       - name: Authenticode-sign Windows STT sidecars
-        if: runner.os == 'Windows' && steps.winsign.outputs.enabled == 'true'
+        if: runner.os == 'Windows' && steps.winsign.outputs.enabled == 'true' && steps.stt_runtime.outputs.mode == 'rebuild'
         # The on-demand runtime archive is NOT part of the MSI, so Tauri's
         # signCommand never sees these binaries. Sign them BEFORE the archive
         # is tarred (its SHA and the updater manifest are computed afterwards,
@@ -219,6 +247,7 @@ jobs:
           & $script -Files $files -Verify
 
       - name: Smoke test sidecars
+        if: steps.stt_runtime.outputs.mode == 'rebuild'
         # Every sidecar must launch: the Windows vibeasr.exe is statically
         # linked, so `--help` succeeding proves no MinGW runtime DLL is needed.
         # A failure here blocks the msi/dmg build — shipping an archive whose
@@ -257,6 +286,7 @@ jobs:
 
       - name: Package STT runtime archive
         id: runtime
+        if: steps.stt_runtime.outputs.mode == 'rebuild'
         # The on-demand shared runtime (lib.rs ensure_runtime_available) is
         # downloaded at first offline-model install from the GitHub release /
         # CloudBase mirror. The archive SHA is stamped into the app binary via
@@ -295,9 +325,11 @@ jobs:
           ARCHIVE="lynse-stt-runtime-$PLATFORM.tar.gz"
           tar -czf "$ARCHIVE" -C "$SIDECARS" .
           SHA=$(sha256sum "$ARCHIVE" | cut -d' ' -f1)
+          echo "LYNSE_STT_RUNTIME_TAG=${LYNSE_RELEASE_TAG}" >> "$GITHUB_ENV"
           echo "$SHA_VAR=$SHA" >> "$GITHUB_ENV"
           echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
           echo "packaged $ARCHIVE (sha256 $SHA)"
+          echo "To pin this rebuilt runtime in apps/tauri/stt-runtime.json: tag=${LYNSE_RELEASE_TAG} specSha256=${{ steps.stt_runtime.outputs.spec_sha256 }} ${PLATFORM}.sha256=${SHA}"
           ls -la "$ARCHIVE"
 
       - name: Detect Apple signing secrets (macOS)
@@ -565,11 +597,10 @@ jobs:
             --repo "${{ github.repository }}" --clobber
 
       - name: Upload STT runtime archive to the release
-        # Tag builds and explicitly named draft-release builds.
-        # The mirror-cloudbase job downloads every release asset, so the
-        # archive is mirrored to updates/<tag>/ on CloudBase automatically —
-        # the layout lib.rs runtime_mirror_url() expects.
-        if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
+        # Only uploaded when STT was actually rebuilt (otherwise apps reuse the
+        # already-mirrored archive pinned in apps/tauri/stt-runtime.json and
+        # mirror-cloudbase only uploads the app installers).
+        if: steps.stt_runtime.outputs.mode == 'rebuild' && (startsWith(github.ref, 'refs/tags/') || inputs.release_tag != '')
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -580,7 +611,7 @@ jobs:
       - name: Upload STT runtime archive as workflow artifact
         # Dispatch builds: attach the archive to the workflow run so a Windows
         # installer + matching runtime can be tested without cutting a tag.
-        if: "!startsWith(github.ref, 'refs/tags/')"
+        if: steps.stt_runtime.outputs.mode == 'rebuild' && !startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.runtime.outputs.archive }}

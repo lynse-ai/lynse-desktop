@@ -778,12 +778,31 @@ fn binaries_present(dir: &Path) -> bool {
         .all(|name| file_present(dir, name))
 }
 
-/// Use the exact release tag so prerelease runtimes stay separate from stable ones.
-pub(crate) fn runtime_version(app: &tauri::AppHandle) -> String {
-    option_env!("LYNSE_RELEASE_TAG")
+/// Resolve the release tag whose on-demand STT runtime archive this build
+/// consumes. Prefers an explicit `LYNSE_STT_RUNTIME_TAG` so routine app
+/// releases can reuse an unchanged, already-mirrored runtime without
+/// rebuilding/re-uploading it (and without forcing users to re-download the
+/// runtime on every app update).
+fn resolve_runtime_version(
+    stt_runtime_tag: Option<&str>,
+    release_tag: Option<&str>,
+    pkg_version: &str,
+) -> String {
+    stt_runtime_tag
+        .map(str::trim)
         .filter(|tag| tag.starts_with('v'))
+        .or_else(|| release_tag.map(str::trim).filter(|tag| tag.starts_with('v')))
         .map(str::to_owned)
-        .unwrap_or_else(|| format!("v{}", app.package_info().version))
+        .unwrap_or_else(|| format!("v{pkg_version}"))
+}
+
+/// Release tag whose on-demand STT runtime archive this build consumes.
+pub(crate) fn runtime_version(app: &tauri::AppHandle) -> String {
+    resolve_runtime_version(
+        option_env!("LYNSE_STT_RUNTIME_TAG"),
+        option_env!("LYNSE_RELEASE_TAG"),
+        &app.package_info().version.to_string(),
+    )
 }
 
 /// Directory of the on-demand shared runtime for `version` (e.g. `v0.1.14`)
@@ -3240,5 +3259,22 @@ mod tests {
         };
         assert_eq!(output.segments.len(), 1);
         assert_eq!(output.segments[0]["speakerId"], "spk-1");
+    }
+
+    #[test]
+    fn resolve_runtime_version_prefers_stt_tag_then_release_tag_then_pkg_version() {
+        assert_eq!(
+            resolve_runtime_version(Some("v1.2.18"), Some("v1.2.20"), "1.2.20"),
+            "v1.2.18"
+        );
+        assert_eq!(
+            resolve_runtime_version(Some("  "), Some("v1.2.20-beta.1"), "1.2.20"),
+            "v1.2.20-beta.1"
+        );
+        assert_eq!(
+            resolve_runtime_version(Some("invalid"), None, "1.2.20"),
+            "v1.2.20"
+        );
+        assert_eq!(resolve_runtime_version(None, None, "1.2.20"), "v1.2.20");
     }
 }

@@ -1,0 +1,12 @@
+{
+  "tag": "v1.2.18",
+  "specSha256": "9e9317ca84981e51091fe72bd50e22b0c623f4e4fda3ca57d59e60cd29c43c62",
+  "platforms": {
+    "macos-aarch64": {
+      "sha256": "1fc3e76737b6fb12118ad1af969feb92a89aa44467071cd40ba3673b893d6f97"
+    },
+    "windows-x86_64": {
+      "sha256": "f680790551d945d46860b984f60cb831b4af015e715f8e9179e7e003cc910a7a"
+    }
+  }
+}

@@ -19,6 +19,36 @@
 > advertised it (its manifest mirror failed and the rollout was cancelled), so
 > that work plus the todo card redesign shipped together as 1.2.7.
 
+## 1.2.19 (2026-11-28)
+
+### New Features
+
+- Multi-language & multi-timezone AI alignment: sends validated 15-language codes and IANA timezones across AI chat, polling/cancellation, attachment URL refresh, session binding, summaries, semantic chapters, and live meeting notes, while omitting unsupported values to prevent HTTP 422 errors.
+- Live streaming Markdown formatting & build metadata: repairs unclosed code fences, links, tables, and emphasis mid-stream inside a single stable wrapper to prevent flicker, and surfaces build number and git SHA in About, diagnostics, and feedback.
+
+### Improvements
+
+- International support & error handling: parses FastAPI `detail` strings and 422 validation errors in `ApiClient`, localizes assistant session-binding fallbacks across all five app languages, extends English report polling deadlines, and adds a shared `mailto:` support card with one-click copy and clipboard fallback.
+- Auth, recording card & workspace polish: refines native Google desktop OAuth and recording-card credential fetching (`lynse-agent-auth`), unifies cloud credentials and credit balance syncing with locale selection, and improves model configuration, note cleanup, and workspace toolbar styling.
+
+### Fixed
+
+- Agent session preflight & timestamp consistency: waits for `/api/session/backend` binding before calling summarize, chapter, notes, and attachment refresh endpoints on the agent origin, normalizes `recording_started_at` to timezone-aware ISO-8601, and avoids opening blank tabs on `mailto:` support links in the workspace panel.
+
+### 新功能
+
+- 多语言与多时区 AI 全面适配：在 AI 对话、轮询/取消、附件链接续签、会话绑定、录音纪要、语义章节与实时笔记请求中统一透传经校验的 15 语种标准码与 IANA 时区，并自动过滤非法值以避免 HTTP 422。
+- 流式 Markdown 实时补全与构建元信息：流式输出期间自动补全未闭合的代码块、链接、表格与强调语法并在单一稳定容器中渲染以消除闪烁；在「关于」、诊断与反馈中展示构建号与 Git SHA。
+
+### 改进
+
+- 国际服客服与错误提示体验：`ApiClient` 兼容提取 FastAPI `detail` 与 422 校验错误信息，会话绑定兜底提示全面五语种本地化；扩展英文报告类查询轮询超时预算；抽取统一 `mailto:` 人工客服卡片，支持一键复制邮箱及无邮件客户端自动复制兜底。
+- 登录、录音卡与工作台细节优化：优化桌面端原生 Google OAuth 登录与录音卡 `lynse-agent-auth` 凭据获取，统一云凭据与积分余额逻辑并同步区域设置，完善模型配置、笔记清理与工作台工具栏样式。
+
+### 错误修复
+
+- Agent 会话绑定门禁与时间戳修复：总结、章节、实时笔记与附件续签接口在发送至 Agent 域名时自动等待 `/api/session/backend` 绑定完成；规范化 `recording_started_at` 为带时区偏移的 ISO-8601 字符串；修复侧边栏聊天点击 `mailto:` 链接残留空白标签页的问题。
+
 ## 1.2.18 (2026-11-26)
 
 ### New Features

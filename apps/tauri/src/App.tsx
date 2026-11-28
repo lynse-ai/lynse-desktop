@@ -123,7 +123,7 @@ function renderWindow(kind: string | null) {
     case "report": return <ReportProblemWindow />;
     default: {
       const desktop = (window as Window & { desktopAPI?: DesktopApi }).desktopAPI;
-      const appVersion = desktop?.appInfo?.version ?? "1.2.18";
+      const appVersion = desktop?.appInfo?.version ?? "1.2.19";
       const isMac = /Macintosh|Mac OS/i.test(navigator.userAgent);
       const isWin = /Windows/i.test(navigator.userAgent);
       const os = isMac ? "macos" : isWin ? "windows" : "other";

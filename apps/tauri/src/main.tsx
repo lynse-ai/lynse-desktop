@@ -62,7 +62,7 @@ async function bootstrap() {
     installPrivatePlugins();
     analytics.track("app_launched", {
       platform: "desktop",
-      version: "1.2.18",
+      version: "1.2.19",
       os: /Macintosh|Mac OS/i.test(navigator.userAgent) ? "macos" : /Windows/i.test(navigator.userAgent) ? "windows" : "other",
       locale: navigator.language,
     });
